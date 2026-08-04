@@ -1,0 +1,35 @@
+# --- capacitances [J/K] ------------------------------------------------
+C_i:      650.0     # [est] air + fixtures + foam inner skin   PC §4.2
+C_w:     1800.0     # [est] block + resident water + rad + DUT PC §4.3
+C_e:      300.0     # [est] gap air + skins + foil + heater    PC §4.4  <-- see SMF §0 warning
+C_r:     2000.0     # [est] reservoir + reject-side water      PC §4.1
+
+# --- conductances [W/K] ------------------------------------------------
+UA_rad:    30.0     # [est] air <-> water bridge               PC §7.1
+G_gap:      0.56    # [est] air <-> gap  — THE LEAK            PC §6.1
+G_out:      0.45    # [est] gap -> ambient                     PC §6.2
+UA_rej:    20.0     # [est] reject radiator -> room            PC §7.1
+
+# --- operating point ---------------------------------------------------
+alpha:      0.97    # [knob] block's share; 0.0 = Mode B       PC §10
+tau_s:      5.0     # [cal]  sensor lag [s]
+c_p_w:   4180.0     # [prop] J/(kg K)
+rho_w:    995.0     # [prop] kg/m3
+
+# --- ranging table: P -> dT_set  ([ctrl], Design notes §3) -------------
+ranges:
+  - {P_max:   50.0, dT_set:  5.0}
+  - {P_max:  200.0, dT_set: 10.0}
+  - {P_max:  600.0, dT_set: 25.0}
+
+# --- controller tuning -------------------------------------------------
+lambda_guard:   60.0   # [ctrl] desired closed-loop tau, guard  [s]
+lambda_reject: 100.0   # [ctrl] desired closed-loop tau, reject [s]
+P_e_max:       100.0   # [knob] guard heater ceiling [W]
+
+# --- budget ------------------------------------------------------------
+P_acc:      1.0     # [ctrl] accuracy target [W]
+P_thr:      0.1     # [ctrl] residual threshold for the steady gate [W]
+sigma_pair_meter: 0.020   # [meas] Pt100 pair residual  [K]
+sigma_pair_guard: 0.020   # [meas] TMP275 pair residual [K]
+flow_cal_err:     0.005   # [cal]  gravimetric flow calibration, fraction
