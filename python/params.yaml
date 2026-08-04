@@ -15,6 +15,7 @@ alpha:      0.97    # [knob] block's share; 0.0 = Mode B       PC §10
 tau_s:      5.0     # [cal]  sensor lag [s]
 c_p_w:   4180.0     # [prop] J/(kg K)
 rho_w:    995.0     # [prop] kg/m3
+mdot:      0.05     # [TODO] nominal water mass flow rate [kg/s] -- placeholder, confirm actual value
 
 # --- ranging table: P -> dT_set  ([ctrl], Design notes §3) -------------
 ranges:
