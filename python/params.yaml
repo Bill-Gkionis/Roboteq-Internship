@@ -15,7 +15,11 @@ alpha:      0.97    # [knob] block's share; 0.0 = Mode B       PC §10
 tau_s:      5.0     # [cal]  sensor lag [s]
 c_p_w:   4180.0     # [prop] J/(kg K)
 rho_w:    995.0     # [prop] kg/m3
-mdot:      0.05     # [TODO] nominal water mass flow rate [kg/s] -- placeholder, confirm actual value
+# Nominal flow. NOT a free parameter: the supervisor derives it per range as
+# mdot = P / (c_p * dT_set).  This value is the 150 W / 10 K corner, i.e.
+# mdot*c_p = 15.0 W/K = 216.4 mL/min.  Design sweep is 3-30 W/K; anything
+# outside that trips the assert in build_plant().
+mdot:      0.00358852   # [est] nominal water mass flow rate [kg/s]
 
 # --- ranging table: P -> dT_set  ([ctrl], Design notes §3) -------------
 ranges:
