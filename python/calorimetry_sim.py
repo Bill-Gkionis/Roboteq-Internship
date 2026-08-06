@@ -14,9 +14,50 @@ Run:  python calorimetry_sim.py
 
 from pathlib import Path
 import importlib.util
+import datetime
+import sys
+
+# ---- prove which interpreter this is, before anything can fail -------------
+print(f"[calorimetry_sim] python {sys.version.split()[0]}   {sys.executable}")
+
+_missing = []
+for _name, _pip in (("numpy", "numpy"), ("matplotlib", "matplotlib"),
+                    ("yaml", "pyyaml"), ("control", "control")):
+    try:
+        __import__(_name)
+    except ImportError:
+        _missing.append(_pip)
+
+if _missing:
+    print("\n  !! these packages are missing FROM THIS INTERPRETER: "
+          + ", ".join(_missing))
+    print("\n  install them into this exact interpreter (not just 'pip install'):")
+    print(f"     {sys.executable} -m pip install " + " ".join(_missing))
+    print("\n  if that fails, this Python is probably too new for one of the wheels.")
+    print("  Any 3.10-3.12 interpreter will work:")
+    print("     python3.12 -m pip install numpy matplotlib pyyaml control")
+    print(f"     python3.12 {Path(__file__).name}")
+    sys.exit(1)
+
+# ---- writability of the output folder, checked once, up front --------------
+_OUT_DIR = Path(__file__).parent.resolve()
+try:
+    _probe = _OUT_DIR / ".write_test"
+    _probe.write_text("ok")
+except OSError as _err:
+    print(f"\n  !! cannot write to {_OUT_DIR}\n     {_err}")
+    sys.exit(1)
+try:
+    _probe.unlink()          # tidy up; deleting is not required, only writing is
+except OSError:
+    pass
 
 import numpy as np                 # pyright: ignore[reportMissingModuleSource]
+import matplotlib                  # pyright: ignore[reportMissingModuleSource]
 import matplotlib.pyplot as plt    # pyright: ignore[reportMissingModuleSource]
+
+SHOW  = True      # True -> also pop the figures up (needs a GUI backend, see the banner)
+SAVED = []        # every file this run wrote, reported at the end
 
 # calorimetry-ss.py has a hyphen, so load it by path rather than by import
 _spec = importlib.util.spec_from_file_location(
@@ -204,7 +245,25 @@ def print_probe_map(r):
 
 # ==================================================================== plots
 
-def plot_response(r, path="response.png"):
+def _save(fig, path):
+    """Write the figure and prove it -- path, size and wall-clock time.
+    If the timestamp does not advance when you re-run, your viewer is caching,
+    not the script."""
+    out = _OUT_DIR / path
+    fig.savefig(out, dpi=140)
+    SAVED.append(out)
+    st = out.stat()
+    print(f"  saved {out}   ({st.st_size / 1024:.0f} kB, "
+          f"{datetime.datetime.fromtimestamp(st.st_mtime):%H:%M:%S})")
+    if not SHOW:
+        plt.close(fig)      # keep it open only if we intend to display it later
+    return out
+
+
+def plot_response(r, path=None):
+    if path is None:                       # filename follows the operating point,
+        path = (f"response_{r['P_DUT'][-1]:.0f}W_"      # so a changed run cannot
+                f"dT{r['dT_w'][-1]:.0f}K.png")          # silently overwrite nothing
     t = r["t"] / 60.0
     fig, ax = plt.subplots(2, 3, figsize=(15, 7.5))
     fig.suptitle(f"Closed-loop step response — P_DUT = {r['P_DUT'][-1]:.0f} W, "
@@ -247,9 +306,8 @@ def plot_response(r, path="response.png"):
     for a in ax.ravel():
         a.set_xlabel("minutes"); a.grid(alpha=0.25); a.legend(fontsize=8)
     fig.tight_layout()
-    out = Path(__file__).parent / path
-    fig.savefig(out, dpi=140)
-    print(f"\n  saved {out}")
+    print()
+    _save(fig, path)
     return fig
 
 
@@ -259,22 +317,41 @@ def demo_windup(P_DUT=600.0, dT=25.0, t_end=5000.0, t_dump=1500.0):
     Load steps to P_DUT, then dumps to 15 W at t_dump -- the error reverses,
     which is when a wound-up integrator has to be unwound and shows itself.
 
-      P_max = 100 W  as designed          -> never saturates
-      P_max =  12 W  marginal             -> clips on the transient, releases
-      P_max =   5 W  below steady demand  -> permanently clipped; NO controller
-                                             fixes this.  It is a sizing failure.
+    The three ceilings are DERIVED from this operating point, not hard-coded,
+    so the demo still means the same thing when you change P_DUT and dT:
+
+      as designed  -> P_e_max from the YAML; never saturates
+      marginal     -> between the steady demand and the transient peak;
+                      clips on the way up, then releases
+      undersized   -> below the steady demand.  Permanently clipped, and NO
+                      controller fixes it.  That is a sizing failure, not tuning.
     """
     mcp = ss.mcp_for_corner(P_DUT, dT)
 
     def load(t):
         return P_DUT if t < t_dump else 15.0
 
+    # size the ceilings from an unclipped probe run
+    probe  = simulate(load, mcp, t_end, guard=GuardPI(P_max=1e9))
+    i_dump = np.searchsorted(probe["t"], t_dump) - 1
+    P_ss   = probe["P_e"][i_dump]                       # steady demand at this load
+    P_peak = probe["P_e"].max()                         # transient peak
+    P_marg = P_ss + 0.35 * (P_peak - P_ss)
+    P_und  = 0.70 * P_ss
+
     runs = {
-        "P_max = 100 W  (as designed)": simulate(load, mcp, t_end, guard=GuardPI(P_max=100.0)),
-        "P_max = 12 W,  AW on":         simulate(load, mcp, t_end, guard=GuardPI(P_max=12.0, use_aw=True)),
-        "P_max = 12 W,  AW OFF":        simulate(load, mcp, t_end, guard=GuardPI(P_max=12.0, use_aw=False)),
-        "P_max = 5 W  (undersized)":    simulate(load, mcp, t_end, guard=GuardPI(P_max=5.0)),
+        f"P_max = {p['P_e_max']:.0f} W  (as designed)":
+            simulate(load, mcp, t_end, guard=GuardPI(P_max=p["P_e_max"])),
+        f"P_max = {P_marg:.1f} W,  AW on":
+            simulate(load, mcp, t_end, guard=GuardPI(P_max=P_marg, use_aw=True)),
+        f"P_max = {P_marg:.1f} W,  AW OFF":
+            simulate(load, mcp, t_end, guard=GuardPI(P_max=P_marg, use_aw=False)),
+        f"P_max = {P_und:.1f} W  (undersized)":
+            simulate(load, mcp, t_end, guard=GuardPI(P_max=P_und)),
     }
+
+    print(f"  guard demand at {P_DUT:.0f} W:  steady {P_ss:.2f} W, "
+          f"transient peak {P_peak:.2f} W")
 
     fig, ax = plt.subplots(1, 3, figsize=(15, 4.2))
     fig.suptitle(f"Saturation & anti-windup — {P_DUT:.0f} W step, load dumped to 15 W "
@@ -290,9 +367,8 @@ def demo_windup(P_DUT=600.0, dT=25.0, t_end=5000.0, t_dump=1500.0):
     for a in ax:
         a.set_xlabel("minutes"); a.grid(alpha=0.25); a.legend(fontsize=7.5)
     fig.tight_layout()
-    out = Path(__file__).parent / "windup.png"
-    fig.savefig(out, dpi=140)
-    print(f"  saved {out}\n")
+    _save(fig, f"windup_{P_DUT:.0f}W_dT{dT:.0f}K.png")
+    print()
 
     gate = p["P_acc"] / G_gap
 
@@ -316,16 +392,37 @@ def demo_windup(P_DUT=600.0, dT=25.0, t_end=5000.0, t_dump=1500.0):
 # ===================================================================== main
 
 if __name__ == "__main__":
-    P, dT = 150.0, 10.0
+    # ==================== CHANGE THESE ====================
+    P     = 150.0     # DUT power [W]
+    dT    = 15.0      # ΔT across the block [K]  -> this sets the flow
+    T_END = 3600.0    # simulated duration [s]
+    # ======================================================
+    # or from a shell, without editing anything:
+    #     python calorimetry_sim.py 300 12
+    if len(sys.argv) >= 3:
+        P, dT = float(sys.argv[1]), float(sys.argv[2])
+
+    backend = matplotlib.get_backend()
+    print("=" * 74)
+    print(f"running   {Path(__file__).resolve()}")
+    print(f"writing   {Path(__file__).parent.resolve()}")
+    print(f"backend   {backend}    SHOW = {SHOW}")
+    if SHOW and backend.lower() == "agg":
+        print("  !! 'Agg' is a file-only backend -- plt.show() cannot open a window.")
+        print("     The PNGs will still be written. For windows, install a GUI backend:")
+        print("       pip install PyQt5        (then re-run)")
+    print("=" * 74)
+
+    plt.close("all")                 # drop any figures left over from a previous run
     mcp = ss.mcp_for_corner(P, dT)
 
-    r = simulate(P, mcp, t_end=3600.0)
+    r = simulate(P, mcp, t_end=T_END)
     print_probe_map(r)
     plot_response(r)
 
     print("\n" + "=" * 74)
-    print("anti-windup demo")
-    demo_windup()
+    print(f"anti-windup demo — same operating point ({P:.0f} W, {dT:.0f} K)")
+    demo_windup(P_DUT=P, dT=dT)
 
     print("\n" + "=" * 74)
     print("corner sweep — closed loop")
@@ -338,3 +435,19 @@ if __name__ == "__main__":
               f"{settling_time(r['t'], r['P_meas'])/60:9.1f} m "
               f"{np.max(np.abs(r['e'])):9.3f} {np.max(np.abs(r['P_leak'])):10.3f} "
               f"{r['P_e'][-1]:8.2f} {r['eps'][-1]:+12.2e}")
+
+    # ---- what this run actually wrote, in full -------------------------------
+    print("\n" + "=" * 74)
+    print(f"wrote {len(SAVED)} figure(s):")
+    for f in SAVED:
+        print(f"   {f}")
+
+    if SHOW:
+        if matplotlib.get_backend().lower() == "agg":
+            print("\nbackend is 'Agg' -- no windows. Open the files above instead.")
+        else:
+            print("\nopening windows -- close them to end the script.")
+            plt.show()          # once, at the very end, so it cannot block mid-run
+    else:
+        print(f"\nSHOW = False. Set it True at the top of {Path(__file__).name} "
+              f"to pop the figures up as well.")
