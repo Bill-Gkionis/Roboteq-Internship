@@ -82,10 +82,15 @@
 		/*
 		 * 1.47" 172x320 IPS panel with an ST7789T-class controller. The
 		 * panel glass is narrower than the controller RAM, hence the
-		 * 34 pixel column offset. Voltage/gamma values follow the panel
-		 * init sequence in Waveshare's shipped driver (Vernon_ST7789T.c);
-		 * ram-param keeps the Zephyr display byte order instead of the
-		 * vendor's little-endian ESP-IDF DMA setting.
+		 * 34 pixel column offset (centered, 34 columns each side, so the
+		 * offset is mirror-invariant). Voltage/gamma values follow the
+		 * panel init sequence in Waveshare's shipped driver
+		 * (Vernon_ST7789T.c); ram-param keeps the Zephyr display byte
+		 * order instead of the vendor's little-endian ESP-IDF DMA
+		 * setting. mdac 0x48 = MX | BGR: the glass scans columns
+		 * mirrored relative to the ST7789 default and has BGR subpixel
+		 * order, matching the vendor demo's runtime setup
+		 * (rgb_endian = BGR, mirror_x = true); hardware-validated.
 		 */
 		st7789v: st7789v@0 {
 			compatible = "sitronix,st7789v";
@@ -97,7 +102,7 @@
 			height = <320>;
 			x-offset = <34>;
 			y-offset = <0>;
-			mdac = <0x00>;
+			mdac = <0x48>;
 			gctrl = <0x75>;
 			vcom = <0x1a>;
 			lcm = <0x80>;

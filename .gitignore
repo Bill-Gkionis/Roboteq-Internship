@@ -9,3 +9,10 @@ venv/
 
 # Zephyr build output
 build/
+
+# Zephyr project files for building (anyone can download these)
+zephyrproject/
+.*
+
+zephyr-sdk-1.0.1/
+.*
