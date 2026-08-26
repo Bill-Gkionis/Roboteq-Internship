@@ -3,3 +3,9 @@
 
 __pycache__/
 *.pyc
+
+venv/
+.venv/
+
+# Zephyr build output
+build/
