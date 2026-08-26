@@ -1,0 +1,75 @@
+/*
+ * SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/pinctrl/esp32s3-pinctrl.h>
+
+&pinctrl {
+	/* QMI8658 IMU bus; SDA/SCL have external 10k pull-ups (R18/R17) */
+	i2c0_default: i2c0_default {
+		group1 {
+			pinmux = <I2C0_SDA_GPIO48>,
+				 <I2C0_SCL_GPIO47>;
+			bias-pull-up;
+			drive-open-drain;
+			output-high;
+		};
+	};
+
+	/* LCD backlight: gate of a low-side N-FET (active high, 10k pull-down) */
+	ledc0_default: ledc0_default {
+		group1 {
+			pinmux = <LEDC_CH0_GPIO46>;
+			output-enable;
+		};
+	};
+
+	/* microSD slot, SDMMC mode; all six lines have external 10k pull-ups */
+	sdhc0_default: sdhc0_default {
+		group1 {
+			pinmux = <SDHC0_CLKOUT_GPIO14>,
+				 <SDHC0_CMD_GPIO15>,
+				 <SDHC0_DATA0_GPIO16>,
+				 <SDHC0_DATA1_GPIO18>,
+				 <SDHC0_DATA2_GPIO17>,
+				 <SDHC0_DATA3_GPIO21>;
+			bias-pull-up;
+			output-high;
+		};
+	};
+
+	/* On-board WS2812B RGB LED data line (DIN), driven by SPI2 MOSI */
+	spim2_ws2812_led: spim2_ws2812_led {
+		group1 {
+			pinmux = <SPIM2_MOSI_GPIO38>;
+			output-low;
+		};
+	};
+
+	/* LCD bus: SCLK/MOSI/hardware CS; the panel is write-only (no MISO) */
+	spim3_default: spim3_default {
+		group1 {
+			pinmux = <SPIM3_SCLK_GPIO40>,
+				 <SPIM3_CSEL_GPIO42>;
+		};
+
+		group2 {
+			pinmux = <SPIM3_MOSI_GPIO45>;
+			output-low;
+		};
+	};
+
+	/* TXD/RXD solder pads on the rear of the board */
+	uart0_default: uart0_default {
+		group1 {
+			pinmux = <UART0_TX_GPIO43>;
+			output-high;
+		};
+
+		group2 {
+			pinmux = <UART0_RX_GPIO44>;
+			bias-pull-up;
+		};
+	};
+};

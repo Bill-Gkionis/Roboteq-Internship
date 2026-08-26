@@ -1,0 +1,248 @@
+/*
+ * SPDX-FileCopyrightText: Copyright The Zephyr Project Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/dts-v1/;
+#include <espressif/esp32s3/esp32s3_r8.dtsi>
+#include <espressif/partitions_0x0_amp_16M.dtsi>
+#include "esp32s3_lcd_1_47b-pinctrl.dtsi"
+#include <zephyr/dt-bindings/adc/adc.h>
+#include <zephyr/dt-bindings/display/panel.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/led/led.h>
+#include <zephyr/dt-bindings/led/worldsemi_ws2812c.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
+
+/ {
+	model = "ESP32-S3-LCD-1.47B PROCPU";
+	compatible = "waveshare,esp32-s3-lcd-1.47b";
+
+	aliases {
+		led-strip = &led_strip;
+		pwm-led0 = &pwm_backlight;
+		sdhc0 = &sdhc0;
+		sw0 = &button0;
+		watchdog0 = &wdt0;
+	};
+
+	chosen {
+		zephyr,sram = &sram1;
+		zephyr,console = &usb_serial;
+		zephyr,shell-uart = &usb_serial;
+		zephyr,flash = &flash0;
+		zephyr,code-partition = &slot0_partition;
+		zephyr,display = &st7789v;
+		zephyr,bt-hci = &esp32_bt_hci;
+	};
+
+	buttons {
+		compatible = "gpio-keys";
+
+		button0: button_0 {
+			gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "BOOT Button";
+			zephyr,code = <INPUT_KEY_0>;
+		};
+	};
+
+	pwmleds {
+		compatible = "pwm-leds";
+
+		/*
+		 * GPIO46 drives the gate of a low-side N-FET (SI2302) switching
+		 * the backlight LED cathode: 100% duty = full brightness. The
+		 * gate has a 10k pull-down, so the backlight is off at reset and
+		 * stays off until this channel is driven.
+		 */
+		pwm_backlight: pwm_backlight {
+			label = "LCD backlight";
+			pwms = <&ledc0 0 PWM_HZ(4000) PWM_POLARITY_NORMAL>;
+		};
+	};
+
+	/* VBAT -> 200k (R1) / 100k (R4) 1% divider -> GPIO1 (ADC1 channel 0) */
+	vbatt: vbatt {
+		compatible = "voltage-divider";
+		io-channels = <&adc0 0>;
+		output-ohms = <100000>;
+		full-ohms = <(200000 + 100000)>;
+		skip-calibration; /* ESP32 ADC does not support calibration */
+	};
+
+	mipi_dbi {
+		compatible = "zephyr,mipi-dbi-spi";
+		spi-dev = <&spi3>;
+		dc-gpios = <&gpio1 9 GPIO_ACTIVE_HIGH>;   /* GPIO41 */
+		reset-gpios = <&gpio1 7 GPIO_ACTIVE_LOW>; /* GPIO39 */
+		write-only;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/*
+		 * 1.47" 172x320 IPS panel with an ST7789T-class controller. The
+		 * panel glass is narrower than the controller RAM, hence the
+		 * 34 pixel column offset. Voltage/gamma values follow the panel
+		 * init sequence in Waveshare's shipped driver (Vernon_ST7789T.c);
+		 * ram-param keeps the Zephyr display byte order instead of the
+		 * vendor's little-endian ESP-IDF DMA setting.
+		 */
+		st7789v: st7789v@0 {
+			compatible = "sitronix,st7789v";
+			reg = <0>;
+			mipi-max-frequency = <12000000>;
+			mipi-mode = "MIPI_DBI_MODE_SPI_4WIRE";
+			pixel-format = <PANEL_PIXEL_FORMAT_RGB_565>;
+			width = <172>;
+			height = <320>;
+			x-offset = <34>;
+			y-offset = <0>;
+			mdac = <0x00>;
+			gctrl = <0x75>;
+			vcom = <0x1a>;
+			lcm = <0x80>;
+			vrhs = <0x13>;
+			vdvs = <0x20>;
+			porch-param = [0c 0c 00 33 33];
+			pwctrl1-param = [a4 a1];
+			pvgam-param = [d0 0d 14 0d 0d 09 38 44 4e 3a 17 18 2f 30];
+			nvgam-param = [d0 09 0f 08 07 14 37 44 4d 38 15 16 2c 2e];
+			ram-param = [00 f0];
+		};
+	};
+};
+
+&adc0 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+	};
+};
+
+&esp32_bt_hci {
+	status = "okay";
+};
+
+&flash0 {
+	reg = <0x0 DT_SIZE_M(16)>;
+	ranges = <0x0 0x0 DT_SIZE_M(16)>;
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	pinctrl-0 = <&i2c0_default>;
+	pinctrl-names = "default";
+
+	/*
+	 * QST QMI8658 6-axis IMU. SA0 is tied to ground, so the device
+	 * responds at 0x6b. Data-ready is wired to INT2 (GPIO12); INT1
+	 * (GPIO13) is also routed to the SoC but unused here.
+	 */
+	qmi8658: qmi8658a@6b {
+		compatible = "qst,qmi8658a";
+		reg = <0x6b>;
+		int-gpios = <&gpio0 12 GPIO_ACTIVE_HIGH>;
+		int-pin = <2>;
+	};
+};
+
+&ledc0 {
+	status = "okay";
+	pinctrl-0 = <&ledc0_default>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel0@0 {
+		reg = <0x0>;
+		timer = <0>;
+	};
+};
+
+/* microSD (TF) slot wired for SDMMC; all six lines have 10k pull-ups */
+&sdhc0 {
+	status = "okay";
+	pinctrl-0 = <&sdhc0_default>;
+	pinctrl-names = "default";
+	max-bus-freq = <DT_FREQ_M(40)>;
+	bus-width = <4>;
+
+	mmc {
+		compatible = "zephyr,sdmmc-disk";
+		disk-name = "SD";
+		status = "okay";
+	};
+};
+
+&spi2 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	pinctrl-0 = <&spim2_ws2812_led>;
+	pinctrl-names = "default";
+	line-idle-low;
+
+	/* Single on-board WS2812B-0807 RGB LED, driven by SPI2 MOSI (GPIO38) */
+	led_strip: ws2812@0 {
+		compatible = "worldsemi,ws2812-spi";
+		reg = <0>;
+		spi-max-frequency = <WS2812C_SPI_FREQ>;
+		chain-length = <1>;
+		color-mapping = <LED_COLOR_ID_GREEN>,
+				<LED_COLOR_ID_RED>,
+				<LED_COLOR_ID_BLUE>;
+		spi-one-frame = <WS2812C_ONE_FRAME>;
+		spi-zero-frame = <WS2812C_ZERO_FRAME>;
+	};
+};
+
+/* LCD bus */
+&spi3 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	pinctrl-0 = <&spim3_default>;
+	pinctrl-names = "default";
+};
+
+&trng0 {
+	status = "okay";
+};
+
+/* TXD/RXD solder pads (no USB-UART bridge on this board) */
+&uart0 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&uart0_default>;
+	pinctrl-names = "default";
+};
+
+&usb_serial {
+	status = "okay";
+};
+
+zephyr_udc0: &usb_otg {};
+
+&wdt0 {
+	status = "okay";
+};
+
+&wifi {
+	status = "okay";
+};
