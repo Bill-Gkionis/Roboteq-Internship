@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>DJC Calorimeter</title>
+<!--
+  Served from the rig's own flash, gzipped at build time.  Constraints that
+  shaped it, in order of force:
+
+   1. NO NETWORK BEYOND THE LAN.  The rig is deliberately not internet
+      exposed, so there is no CDN, no web font and no external anything -
+      one file, system fonts only.  ("Exo / Roboto Mono" was the type
+      recommendation; a webfont the browser cannot fetch renders as a
+      fallback anyway, so the fallback IS the design.)
+   2. FLASH IS THE BUDGET.  Hand-written CSS and ~120 lines of JS, no
+      framework.  Roughly 4 kB gzipped.
+   3. READ ACROSS A BENCH.  Swiss/minimal, grid-based, one hero number,
+      everything else subordinate to it.
+   4. Same data as the panel, laid out for the screen it lands on - a phone
+      at the rig or a 27" monitor across the lab.  It is not a pixel mirror
+      of the 172 px panel, which could only ever be upscaled.
+-->
+<style>
+:root{
+  /* Swiss/minimal dark palette, contrast-checked against --bg */
+  --bg:#0B0B10; --card:#1E1E23; --muted:#232328; --border:#1E293B;
+  --fg:#F8FAFC; --fg-muted:#94A3B8;
+  --accent:#3B82F6; --ok:#3FB950; --warn:#D29922; --bad:#EF4444;
+  /* dense dashboard spacing scale */
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --r:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+  font-size:16px;line-height:1.5;-webkit-text-size-adjust:100%}
+body{padding:var(--s4) max(var(--s4),env(safe-area-inset-left)) var(--s6)}
+h1,h2{margin:0;font-weight:600;letter-spacing:-.01em}
+.wrap{max-width:1200px;margin:0 auto}
+
+/* ---- header ---------------------------------------------------------- */
+header{display:flex;align-items:baseline;gap:var(--s3);flex-wrap:wrap;
+  padding-bottom:var(--s4);border-bottom:1px solid var(--border);margin-bottom:var(--s5)}
+h1{font-size:1.05rem}
+.sub{color:var(--fg-muted);font-size:.8rem;font-family:var(--mono)}
+.link{margin-left:auto;display:flex;gap:var(--s2);align-items:center}
+
+/* ---- chips ----------------------------------------------------------- */
+.chip{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;
+  padding:3px 10px;border-radius:999px;font-size:.75rem;font-weight:600;
+  letter-spacing:.04em;text-transform:uppercase;
+  background:var(--muted);color:var(--fg-muted);border:1px solid var(--border)}
+.chip .dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+.chip.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
+.chip.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent)}
+.chip.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
+
+/* ---- grid ------------------------------------------------------------ */
+.grid{display:grid;gap:var(--s3);grid-template-columns:1fr}
+@media(min-width:640px){.grid{grid-template-columns:repeat(2,1fr)}}
+@media(min-width:1024px){.grid{grid-template-columns:repeat(4,1fr)}
+  .span2{grid-column:span 2}.span4{grid-column:span 4}}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+  padding:var(--s4)}
+.card h2{font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--fg-muted);margin-bottom:var(--s3)}
+
+/* ---- the hero number ------------------------------------------------- */
+.hero{display:flex;flex-direction:column;gap:var(--s2)}
+.hero .val{font-family:var(--mono);font-size:clamp(2.6rem,11vw,4.5rem);
+  line-height:1;font-weight:600;font-variant-numeric:tabular-nums}
+.hero .unit{font-size:.4em;color:var(--fg-muted);margin-left:.15em}
+.hero .band{color:var(--fg-muted);font-family:var(--mono);font-size:.85rem}
+.gates{display:flex;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s2)}
+
+/* ---- readouts -------------------------------------------------------- */
+.rows{display:grid;gap:var(--s2)}
+.row{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s3);
+  font-size:.85rem}
+.row span:first-child{color:var(--fg-muted)}
+.row span:last-child{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ---- bars ------------------------------------------------------------ */
+.bar{margin-bottom:var(--s3)}
+.bar:last-child{margin-bottom:0}
+.bar .lab{display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:5px}
+.bar .lab b{font-family:var(--mono);font-weight:500;font-variant-numeric:tabular-nums}
+.track{height:7px;border-radius:4px;background:var(--muted);overflow:hidden}
+.fill{height:100%;width:0;border-radius:4px;background:var(--accent);
+  transition:width .25s ease}
+@media(prefers-reduced-motion:reduce){.fill{transition:none}}
+
+/* ---- controls -------------------------------------------------------- */
+.ctl{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center}
+button,input{font:inherit;font-size:.85rem;border-radius:8px;
+  border:1px solid var(--border);background:var(--muted);color:var(--fg);
+  padding:10px 14px;min-height:44px}
+button{cursor:pointer;font-weight:600;transition:background .18s ease,border-color .18s ease}
+button:hover{background:#2C2C33;border-color:#33415A}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--ok);border-color:var(--ok);color:#06210C}
+button.primary:hover{filter:brightness(1.08)}
+button.danger{background:var(--bad);border-color:var(--bad);color:#2A0606}
+input{font-family:var(--mono);width:7.5em;min-width:0}
+.note{color:var(--fg-muted);font-size:.78rem;margin-top:var(--s3)}
+.banner{display:none;margin-bottom:var(--s4);padding:var(--s3) var(--s4);
+  border-radius:var(--r);border:1px solid var(--bad);
+  background:color-mix(in srgb,var(--bad) 14%,transparent);
+  color:var(--fg);font-weight:600}
+.banner.on{display:block}
+.stale{opacity:.45}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>DJC Calorimeter</h1>
+  <span class="sub" id="fw">&mdash;</span>
+  <div class="link">
+    <span class="chip" id="conn"><i class="dot"></i><span>connecting</span></span>
+    <span class="chip" id="state">boot</span>
+  </div>
+</header>
+
+<div class="banner" id="banner" role="alert"></div>
+
+<div class="grid">
+
+  <!-- the one number the whole instrument exists to produce -->
+  <section class="card span2 hero" aria-labelledby="h-power">
+    <h2 id="h-power">Measured loss</h2>
+    <div>
+      <span class="val" id="p">--.--</span><span class="unit">W</span>
+    </div>
+    <div class="band" id="pband">observer &mdash; W &nbsp;&middot;&nbsp; P_aux &mdash; W</div>
+    <div class="gates" role="status" aria-atomic="true" aria-label="measurement gates">
+      <span class="chip" id="g-null"><i class="dot"></i><span>null gate</span></span>
+      <span class="chip" id="g-steady"><i class="dot"></i><span>steady gate</span></span>
+      <span class="chip" id="g-arm"><i class="dot"></i><span>heaters</span></span>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="h-temp">
+    <h2 id="h-temp">Temperatures</h2>
+    <div class="rows">
+      <div class="row"><span>inner chamber</span><span id="t_in">&mdash;</span></div>
+      <div class="row"><span>guard gap</span><span id="t_gd">&mdash;</span></div>
+      <div class="row"><span>null error e</span><span id="e">&mdash;</span></div>
+      <div class="row"><span>water in / out</span><span id="tw">&mdash;</span></div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="h-flow">
+    <h2 id="h-flow">Water loop</h2>
+    <div class="rows">
+      <div class="row"><span>flow</span><span id="flow">&mdash;</span></div>
+      <div class="row"><span>&Delta;T (tared)</span><span id="dtw">&mdash;</span></div>
+      <div class="row"><span>mdot&middot;cp</span><span id="mcp">&mdash;</span></div>
+      <div class="row"><span>tare</span><span id="tare">&mdash;</span></div>
+    </div>
+  </section>
+
+  <section class="card span2" aria-labelledby="h-act">
+    <h2 id="h-act">Actuators</h2>
+    <div class="bar"><div class="lab"><span>inner heater</span><b id="l-hin">0 %</b></div>
+      <div class="track"><div class="fill" id="b-hin" style="background:var(--bad)"></div></div></div>
+    <div class="bar"><div class="lab"><span>guard heater</span><b id="l-hgd">0 %</b></div>
+      <div class="track"><div class="fill" id="b-hgd" style="background:var(--warn)"></div></div></div>
+    <div class="bar"><div class="lab"><span>chamber fans (frozen)</span><b id="l-fan">0 %</b></div>
+      <div class="track"><div class="fill" id="b-fan"></div></div></div>
+    <div class="bar"><div class="lab"><span>reject fans</span><b id="l-rej">0 %</b></div>
+      <div class="track"><div class="fill" id="b-rej"></div></div></div>
+    <div class="bar"><div class="lab"><span>pump</span><b id="l-pmp">0 %</b></div>
+      <div class="track"><div class="fill" id="b-pmp" style="background:var(--ok)"></div></div></div>
+  </section>
+
+  <section class="card span2" aria-labelledby="h-prog">
+    <h2 id="h-prog">Point progress</h2>
+    <div class="bar"><div class="lab"><span>dwell (both gates green)</span><b id="l-dwell">0 / 300 s</b></div>
+      <div class="track"><div class="fill" id="b-dwell" style="background:var(--ok)"></div></div></div>
+    <div class="rows">
+      <div class="row"><span>settling</span><span id="settle">&mdash;</span></div>
+      <div class="row"><span>guard integrator</span><span id="gi">&mdash;</span></div>
+      <div class="row"><span>reading slope / gate</span><span id="slope">&mdash;</span></div>
+      <div class="row"><span>last logged point</span><span id="last">&mdash;</span></div>
+    </div>
+  </section>
+
+  <section class="card span4" aria-labelledby="h-ctl">
+    <h2 id="h-ctl">Control</h2>
+    <div class="ctl">
+      <button class="primary" id="btn-start">Start point</button>
+      <button class="danger" id="btn-stop">Stop</button>
+      <label class="sub" for="tss">Tss</label>
+      <input id="tss" type="number" step="0.5" inputmode="decimal" aria-label="chamber setpoint, degrees C">
+      <button data-cmd="tss" data-from="tss">Set &deg;C</button>
+      <label class="sub" for="dtw_set">&Delta;T</label>
+      <input id="dtw_set" type="number" step="0.5" inputmode="decimal" aria-label="water delta T setpoint, kelvin">
+      <button data-cmd="dtw" data-from="dtw_set">Set K</button>
+      <button data-cmd="soak">Soak cal</button>
+      <button data-cmd="tare">Tare cal</button>
+      <button data-cmd="clear">Clear fault</button>
+      <label class="sub" for="tok">Token</label>
+      <input id="tok" type="text" placeholder="from panel" aria-label="control token shown on the rig's panel">
+    </div>
+    <p class="note">Commands go through the same interlocks as the panel&rsquo;s buttons &mdash;
+      heaters stay refused unless flow is above minimum, every zone sensor is fresh, and no
+      fault is latched. The token is shown on the rig&rsquo;s NET screen.</p>
+  </section>
+
+</div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var $=function(id){return document.getElementById(id);};
+  var lastRx=0;
+
+  // The token is a per-boot value typed once; keeping it here saves retyping
+  // on every reload without ever sending it anywhere but this rig.
+  try{ $("tok").value = localStorage.getItem("caltok") || ""; }catch(e){}
+  $("tok").addEventListener("change",function(){
+    try{ localStorage.setItem("caltok",$("tok").value); }catch(e){}
+  });
+
+  function chip(el,cls,text){
+    el.className = "chip"+(cls?" "+cls:"");
+    el.lastElementChild.textContent = text;
+  }
+  function bar(b,l,frac,txt){
+    var pct = Math.max(0,Math.min(1,frac||0))*100;
+    $(b).style.width = pct.toFixed(1)+"%";
+    $(l).textContent = txt || (pct.toFixed(0)+" %");
+  }
+  var f=function(v,n){return (v===undefined||v===null)?"—":v.toFixed(n);};
+
+  function render(d){
+    lastRx = Date.now();
+    document.body.classList.remove("stale");
+
+    $("fw").textContent = "fw "+d.fw+"  ·  params "+d.params;
+    chip($("state"), d.faults?"bad":"", d.state);
+
+    var b=$("banner");
+    b.className = d.faults ? "banner on" : "banner";
+    if(d.faults){ b.textContent = "FAULT — "+d.fault_name+" · outputs safe · clear explicitly"; }
+
+    $("p").textContent = f(d.p_meas,2);
+    $("pband").textContent = "observer "+f(d.p_hat,2)+" W · P_aux "+f(d.p_aux,2)+" W";
+
+    chip($("g-null"),   d.gate_null?"ok":"",   "null "+f(d.e,3)+" K");
+    chip($("g-steady"), d.gate_steady?"ok":"", "steady");
+    chip($("g-arm"),    d.armed?"ok":"warn",   d.armed?"heaters armed":"heaters safe");
+
+    $("t_in").textContent = f(d.t_in,3)+" °C";
+    $("t_gd").textContent = f(d.t_gd,3)+" °C";
+    $("e").textContent    = f(d.e,4)+" K";
+    $("tw").textContent   = f(d.tw_in,2)+" / "+f(d.tw_out,2)+" °C";
+
+    $("flow").textContent = f(d.flow,1)+" / "+f(d.flow_set,0)+" mL/min";
+    $("dtw").textContent  = f(d.dtw,4)+" K";
+    $("mcp").textContent  = f(d.mcp,2)+" W/K";
+    $("tare").textContent = f(d.tare,4)+" K";
+
+    bar("b-hin","l-hin",d.duty_hin); bar("b-hgd","l-hgd",d.duty_hgd);
+    bar("b-fan","l-fan",d.duty_fan); bar("b-rej","l-rej",d.duty_rej);
+    bar("b-pmp","l-pmp",d.pump);
+
+    bar("b-dwell","l-dwell", d.dwell_s/d.dwell_target,
+        d.dwell_s+" / "+d.dwell_target+" s");
+    $("settle").textContent = d.settle_s+" s";
+    $("gi").textContent     = f(d.guard_i,2)+" W  (demand "+f(d.guard_w,2)+" W)";
+    $("slope").textContent  = d.slope.toExponential(2)+" / "+d.slope_gate.toExponential(2)+" W/s";
+    $("last").textContent   = d.last_ok ? (f(d.last_w,3)+" ± "+f(d.last_se,3)+" W") : "none yet";
+
+    if(document.activeElement !== $("tss"))     $("tss").placeholder     = f(d.tss,1);
+    if(document.activeElement !== $("dtw_set")) $("dtw_set").placeholder = f(d.dtw_set,1);
+  }
+
+  function send(cmd,arg){
+    return fetch("/api/cmd",{method:"POST",body:JSON.stringify(
+      {cmd:cmd,arg:Number(arg)||0,token:$("tok").value})})
+      .then(function(r){return r.json();})
+      .then(function(j){ if(!j.ok){ alert("refused: "+(j.err||j.rc)); } })
+      .catch(function(){ alert("no response from the rig"); });
+  }
+  $("btn-start").onclick=function(){send("start",0);};
+  $("btn-stop").onclick =function(){send("stop",0);};
+  Array.prototype.forEach.call(document.querySelectorAll("[data-cmd]"),function(b){
+    b.onclick=function(){ send(b.dataset.cmd, b.dataset.from?$(b.dataset.from).value:0); };
+  });
+
+  // Prefer the server push; fall back to polling when the build has no
+  // WebSocket (it costs the rig a crypto module it does not otherwise need).
+  // Either way the update rate is 1 Hz, which is the control tick and the
+  // fastest real signal this instrument has.
+  function poll(){
+    fetch("/api/state").then(function(r){return r.json();}).then(render).catch(function(){});
+  }
+  function connect(){
+    var ws;
+    try{ ws = new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws"); }
+    catch(e){ ws = null; }
+    if(!ws){ chip($("conn"),"warn","polling"); setInterval(poll,1000); poll(); return; }
+
+    var fellBack=false;
+    ws.onopen   =function(){ chip($("conn"),"ok","live"); };
+    ws.onmessage=function(ev){ try{ render(JSON.parse(ev.data)); }catch(e){} };
+    ws.onerror  =function(){ };
+    ws.onclose  =function(){
+      if(fellBack) return; fellBack=true;
+      chip($("conn"),"warn","polling"); setInterval(poll,1000); poll();
+    };
+  }
+  connect();
+
+  // If nothing has arrived for three ticks the numbers on screen are history,
+  // and the page says so rather than showing a confident stale value.
+  setInterval(function(){
+    if(Date.now()-lastRx > 3000){
+      document.body.classList.add("stale");
+      chip($("conn"),"bad","no data");
+    }
+  },1000);
+})();
+</script>
+</body>
+</html>

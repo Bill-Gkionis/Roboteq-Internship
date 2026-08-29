@@ -1,0 +1,372 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * ===========================================================================
+ *  PROVISIONAL BRING-UP OVERLAY - Waveshare ESP32-S3-LCD-1.47B dev kit
+ * ===========================================================================
+ *
+ *  THIS IS NOT THE CARRIER-BOARD OVERLAY.  The custom carrier PCB
+ *  (Board/Requirements.md) does not exist yet, so this file wires the whole
+ *  calorimeter peripheral set onto the dev kit that already exists, so the
+ *  firmware can be built, run and bench-tested end to end.  When the carrier
+ *  board is finished ONLY THIS FILE changes: every node label below is a
+ *  contract the C code binds to, and no .c file names a pin, an address or a
+ *  bus.  (Zephyr Suggestions D10 / section 4, "devicetree first".)
+ *
+ *  Pin budget on this dev kit
+ *  --------------------------
+ *  Free header pins are GPIO2-11 only, which is not enough, so two on-board
+ *  peripherals are switched off to free theirs:
+ *
+ *    - &sdhc0   (microSD)  -> frees GPIO14/15/16/17/18/21.  Standalone SD
+ *                             logging was never in scope (Zephyr Suggestions
+ *                             s13 open item 8); telemetry goes over USB-CDC
+ *                             and Wi-Fi.
+ *    - &led_strip (WS2812) -> frees SPI2 for the RTD front ends.  The WS2812
+ *                             sits directly on the SPI2 data line with NO chip
+ *                             select, so it cannot share the bus with an SPI
+ *                             slave: every MAX31865 transaction would be
+ *                             clocked into the LED as pixel data.
+ *
+ *  Display, backlight, BOOT button, USB console, Wi-Fi and the IMU bus are
+ *  left exactly as the (hardware-validated) board definition has them.
+ *
+ *  Nothing that drives a gate sits on a strapping pin (GPIO0/3/45/46), per
+ *  Zephyr Suggestions s4: they are sampled at reset and some pulse during boot.
+ * ===========================================================================
+ */
+
+#include <zephyr/dt-bindings/pinctrl/esp32s3-pinctrl.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/lvgl/lvgl.h>
+
+/ {
+	aliases {
+		/* Every device the app opens is reached through one of these, so
+		 * re-pinning for the carrier board never touches a .c file.
+		 */
+		cal-t-inner  = &tmp_inner;
+		cal-t-guard  = &tmp_guard;
+		cal-rtd-in   = &rtd_water_in;
+		cal-rtd-out  = &rtd_water_out;
+		cal-flow     = &pcnt;
+		cal-ina-hin  = &ina_heat_inner;
+		cal-ina-hgrd = &ina_heat_guard;
+		cal-ina-fan  = &ina_fan_inner;
+		cal-ina-pump = &ina_pump;
+	};
+
+	/*
+	 * PWM actuators.  "pwm-leds" is used as the binding because it is the
+	 * standard Zephyr way to name one PWM channel and hand it out as a
+	 * struct pwm_dt_spec - the class of load behind it is irrelevant to the
+	 * binding, and using it means no custom binding to maintain.
+	 */
+	cal_pwm {
+		compatible = "pwm-leds";
+
+		/* Heaters at 1 kHz: LEDC gives log2(80 MHz / f) = 16 bits of
+		 * duty resolution there, far more than the 12 needed for 0.024 %
+		 * of P_max (~37 mW at 150 W).  Far above any thermal effect and
+		 * far below any gate-loss or EMI concern.  (Suggestions s4.4)
+		 */
+		pwm_heat_inner: pwm_heat_inner {
+			label = "inner chamber heater";
+			pwms = <&ledc0 1 PWM_HZ(1000) PWM_POLARITY_NORMAL>;
+		};
+		pwm_heat_guard: pwm_heat_guard {
+			label = "guard chamber heater";
+			pwms = <&ledc0 2 PWM_HZ(1000) PWM_POLARITY_NORMAL>;
+		};
+
+		/* Fans at 25 kHz - the Intel 4-wire PWM fan spec. */
+		pwm_fan_inner: pwm_fan_inner {
+			label = "inner chamber pickup fans";
+			pwms = <&ledc0 3 PWM_HZ(25000) PWM_POLARITY_NORMAL>;
+		};
+		pwm_fan_guard: pwm_fan_guard {
+			label = "guard gap fans";
+			pwms = <&ledc0 4 PWM_HZ(25000) PWM_POLARITY_NORMAL>;
+		};
+		pwm_fan_reject: pwm_fan_reject {
+			label = "reject radiator fans";
+			pwms = <&ledc0 5 PWM_HZ(25000) PWM_POLARITY_NORMAL>;
+		};
+
+		/* Pump STEP: the pulse FREQUENCY is the flow command, so
+		 * water-loop.c rewrites the period on every setpoint change.
+		 * The value here is only the power-on placeholder.
+		 */
+		pwm_pump_step: pwm_pump_step {
+			label = "peristaltic pump STEP";
+			pwms = <&ledc0 6 PWM_HZ(1000) PWM_POLARITY_NORMAL>;
+		};
+	};
+
+	/* Discrete IO, described by the app's own binding (dts/bindings/). */
+	cal_io: cal_io {
+		compatible = "calorimeter,io";
+		pump-dir-gpios = <&gpio0 10 GPIO_ACTIVE_HIGH>;
+		pump-enable-gpios = <&gpio0 11 GPIO_ACTIVE_LOW>;
+		alert-gpios = <&gpio0 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+	};
+
+	/*
+	 * This board has NO touch controller (it is the "B" base variant), so
+	 * the single BOOT button is handed to LVGL as a keypad emitting
+	 * LV_KEY_NEXT, which is enough to cycle the three screens.  Fit a touch
+	 * panel and this becomes a "zephyr,lvgl-pointer-input" node instead -
+	 * ui.c needs no change either way.
+	 */
+	lvgl_keypad {
+		compatible = "zephyr,lvgl-keypad-input";
+		input = <&{/buttons}>;
+		input-codes = <INPUT_KEY_0>;
+		lvgl-codes = <LV_KEY_NEXT>;
+	};
+};
+
+/* ------------------------------------------------------------------ pinctrl */
+&pinctrl {
+	/* LEDC channels 0..6.  Channel 0 (GPIO46, LCD backlight) is declared by
+	 * the board; it is repeated here because pinctrl-0 is replaced
+	 * wholesale, not merged, and dropping it would kill the backlight.
+	 */
+	ledc0_default: ledc0_default {
+		group1 {
+			pinmux = <LEDC_CH0_GPIO46>,   /* LCD backlight (board) */
+				 <LEDC_CH1_GPIO4>,    /* inner heater gate     */
+				 <LEDC_CH2_GPIO5>,    /* guard heater gate     */
+				 <LEDC_CH3_GPIO6>,    /* inner fans            */
+				 <LEDC_CH4_GPIO7>,    /* guard fans            */
+				 <LEDC_CH5_GPIO8>,    /* reject fans           */
+				 <LEDC_CH6_GPIO9>;    /* pump STEP             */
+			output-enable;
+		};
+	};
+
+	/* Flow sensor pulse train into PCNT unit 0 channel 0.  The Biotech
+	 * FCH-m output is push-pull at its own VCC, and VCC is set to 3.3 V, so
+	 * it drives this pin directly - no level shifter (Board Suggestions s7).
+	 */
+	pcnt_flow_default: pcnt_flow_default {
+		group1 {
+			pinmux = <PCNT0_CH0SIG_GPIO2>;
+			bias-pull-up;
+		};
+	};
+
+	/* SPI2 re-purposed as the RTD bus, on the pins freed by disabling SD. */
+	spim2_rtd: spim2_rtd {
+		group1 {
+			pinmux = <SPIM2_SCLK_GPIO14>,
+				 <SPIM2_MISO_GPIO16>;
+		};
+		group2 {
+			pinmux = <SPIM2_MOSI_GPIO15>;
+			output-low;
+		};
+	};
+};
+
+/* --------------------------------------------------------- freed peripherals */
+&sdhc0 {
+	status = "disabled";	/* frees GPIO14/15/16/17/18/21 for the RTD bus */
+};
+
+&led_strip {
+	status = "disabled";	/* WS2812 cannot share SPI2 - see header */
+};
+
+/* ---------------------------------------------------------------- LEDC bank */
+&ledc0 {
+	/* Six more channels on top of the board's backlight channel.  The S3's
+	 * LEDC has 8 channels and 4 timers; channels sharing a timer share a
+	 * frequency, which is exactly how the three groups below are arranged:
+	 *   timer0 = 4 kHz backlight, timer1 = 1 kHz heaters,
+	 *   timer2 = 25 kHz fans,     timer3 = pump step (variable).
+	 */
+	channel1@1 { reg = <0x1>; timer = <1>; };
+	channel2@2 { reg = <0x2>; timer = <1>; };
+	channel3@3 { reg = <0x3>; timer = <2>; };
+	channel4@4 { reg = <0x4>; timer = <2>; };
+	channel5@5 { reg = <0x5>; timer = <2>; };
+	channel6@6 { reg = <0x6>; timer = <3>; };
+};
+
+/* ------------------------------------------------------------------- I2C bus */
+&i2c0 {
+	/* 100 kHz, not 400 kHz: there is zero speed pressure at a 1 Hz tick and
+	 * the noise immunity of the slower edge rate is free (Suggestions s4.3
+	 * "bus hardening").  The on-board IMU shares this bus but is unused.
+	 *
+	 * On the carrier board this becomes a dedicated sensor bus behind a
+	 * TCA9548A mux; the mux legs appear here as extra i2c nodes and nothing
+	 * in temp-sense.c changes but the alias list.
+	 */
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+
+	/* --- chamber temperatures -------------------------------------------
+	 * TMP117 in continuous conversion, 64-sample average, 1000 ms cycle:
+	 * the part averages in hardware over exactly one control tick, so the
+	 * firmware needs no filter and cannot alias (Suggestions s4.3).
+	 */
+	tmp_inner: tmp117@48 {
+		compatible = "ti,tmp11x";
+		reg = <0x48>;
+		odr = <0x200>;		/* TMP11X_DT_ODR_1000_MS     */
+		oversampling = <0x60>;	/* TMP11X_DT_OVERSAMPLING_64 */
+	};
+
+	tmp_guard: tmp117@49 {
+		compatible = "ti,tmp11x";
+		reg = <0x49>;
+		odr = <0x200>;
+		oversampling = <0x60>;
+	};
+
+	/* --- rail metering ---------------------------------------------------
+	 * Which rails are metered, and to what grade, is a BOUNDARY decision,
+	 * not a component one (Suggestions s4.6): every watt dissipated inside
+	 * boundary B1 that is not metered is reported as DUT loss 1:1.
+	 *   inside B1  -> measurement grade, subtracted from the reading
+	 *   outside B1 -> protection grade, health and POST only
+	 *
+	 * Shunt sizing: R matched to the INA226's +-81.92 mV shunt full scale at
+	 * the rail's maximum current; current-lsb is Imax / 2^15 rounded up.
+	 */
+	ina_heat_inner: ina226@40 {
+		compatible = "ti,ina226";
+		reg = <0x40>;
+		/* INSIDE B1, and the best electrical measurement in the rig:
+		 * this resistor is both the chamber preheat AND the
+		 * DUT-substitution calibration reference, so it is wired
+		 * 4-wire/Kelvin with the sense leads landing on the resistor's
+		 * own terminals.  100 W at 12 V = 8.3 A; sensing at the supply
+		 * instead would cost 3.5 % (Board Requirements, 12 V table).
+		 */
+		rshunt-micro-ohms = <5000>;	/* 5 mR -> 50 mV at 10 A */
+		current-lsb-microamps = <500>;
+		avg-count = <64>;		/* averages over ~64 PWM periods */
+		vbus-conversion-time-us = <1100>;
+		vshunt-conversion-time-us = <1100>;
+		alert-gpios = <&gpio0 13 GPIO_ACTIVE_LOW>;
+	};
+
+	ina_heat_guard: ina226@41 {
+		compatible = "ti,ina226";
+		reg = <0x41>;
+		/* OUTSIDE B1, protection grade only.  Once the guard loop is
+		 * closed its integral action drives this channel's DC gain to
+		 * the reading to exactly zero (System Modeling Final s19), so
+		 * the largest power in the rig needs the least accurate
+		 * measurement of any of them.
+		 */
+		rshunt-micro-ohms = <5000>;
+		current-lsb-microamps = <500>;
+		avg-count = <64>;
+		alert-gpios = <&gpio0 13 GPIO_ACTIVE_LOW>;
+	};
+
+	ina_fan_inner: ina226@44 {
+		compatible = "ti,ina226";
+		reg = <0x44>;
+		/* INSIDE B1, mandatory.  Doubles as the only sensor that can
+		 * see one stalled fan in a PST daisy chain, because a stopped
+		 * fan draws visibly less current (Suggestions s4.5).
+		 */
+		rshunt-micro-ohms = <100000>;	/* 100 mR -> 50 mV at 0.5 A */
+		current-lsb-microamps = <20>;
+		avg-count = <16>;
+	};
+
+	ina_pump: ina226@45 {
+		compatible = "ti,ina226";
+		reg = <0x45>;
+		/* OUTSIDE B1, health only (tube binding, occlusion).  The
+		 * Biotech sensor is the flow meter; the pump is the actuator.
+		 */
+		rshunt-micro-ohms = <10000>;	/* 10 mR -> 50 mV at 5 A */
+		current-lsb-microamps = <200>;
+		avg-count = <16>;
+	};
+};
+
+/* ------------------------------------------------------------------ RTD bus */
+&spi2 {
+	status = "okay";
+	pinctrl-0 = <&spim2_rtd>;
+	pinctrl-names = "default";
+	/delete-property/ line-idle-low;	/* was a WS2812 requirement */
+	cs-gpios = <&gpio0 17 GPIO_ACTIVE_LOW>,
+		   <&gpio0 18 GPIO_ACTIVE_LOW>;
+
+	/*
+	 * Jumo VIBROtemp dT pair.  Both probes are Pt100; the MAX31865 binding
+	 * treats 2- and 4-wire identically (maxim,3-wire absent).
+	 *
+	 * KNOWN LIMITATION, carried deliberately: two converters means two
+	 * reference resistors, and their mismatch does NOT cancel in the
+	 * difference.  Suggestions s4.1 wants ONE converter multiplexed across
+	 * both probes so gain/reference error is common mode and cancels.  That
+	 * is a carrier-board change (a 4-wire mux), not a firmware one - the C
+	 * side already reads the pair through a single code path.  Until then
+	 * the mismatch is absorbed by the per-flow-range in-situ tare in
+	 * calibration.c, which is a [cal] value in NVS.
+	 */
+	rtd_water_in: max31865@0 {
+		compatible = "maxim,max31865";
+		reg = <0>;
+		spi-max-frequency = <500000>;
+		resistance-at-zero = <100>;	/* Pt100 */
+		resistance-reference = <430>;	/* Adafruit-style breakout */
+		filter-50hz;			/* EU mains */
+	};
+
+	rtd_water_out: max31865@1 {
+		compatible = "maxim,max31865";
+		reg = <1>;
+		spi-max-frequency = <500000>;
+		resistance-at-zero = <100>;
+		resistance-reference = <430>;
+		filter-50hz;
+	};
+};
+
+/* ------------------------------------------------------- flow pulse counter */
+&pcnt {
+	status = "okay";
+	pinctrl-0 = <&pcnt_flow_default>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	pcnt_flow: unit0@0 {
+		reg = <0>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		/* 1000 APB cycles = 12.5 us of glitch rejection.  The highest
+		 * expected pulse rate is ~35 Hz at the 216 mL/min hot corner,
+		 * so this is four orders of magnitude of margin.
+		 */
+		filter = <1000>;
+		/* The hardware counter is 16-bit and wraps at +-32767.  Setting
+		 * a limit makes the driver's ISR accumulate into a 32-bit
+		 * software counter, so what the firmware reads never rolls over
+		 * inside a campaign.
+		 */
+		high-limit = <10000>;
+		low-limit = <(-10000)>;
+
+		channel0@0 {
+			reg = <0>;
+			sig-pos-mode = <1>;	/* count up on the rising edge */
+			sig-neg-mode = <0>;	/* ignore the falling edge     */
+			ctrl-h-mode = <0>;
+			ctrl-l-mode = <0>;
+		};
+	};
+};

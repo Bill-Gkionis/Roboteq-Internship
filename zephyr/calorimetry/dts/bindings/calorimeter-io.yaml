@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The calorimeter's discrete (non-PWM, non-bus) IO lines, gathered into one
+# node so the firmware fetches them with GPIO_DT_SPEC_GET() by property name
+# and never mentions a pin number.  Re-pinning for the carrier board is then an
+# overlay edit, not a code change.
+
+description: Calorimeter discrete IO lines
+
+compatible: "calorimeter,io"
+
+properties:
+  pump-dir-gpios:
+    type: phandle-array
+    description: Stepper driver DIR input. Direction is fixed in this rig.
+
+  pump-enable-gpios:
+    type: phandle-array
+    description: |
+      Stepper driver enable. Active low on every common driver (ENn), and it
+      must have an external pull-UP so the driver is disabled while the MCU
+      pins are inputs at reset - the mirror of the heater gate pull-down rule.
+
+  alert-gpios:
+    type: phandle-array
+    description: |
+      Wired-OR, open-drain ALERT line from the heater-rail INA226s. This is the
+      tier-1 hardware-timed over-current trip; firmware only latches it, which
+      is why the safety thread can act on it without touching a bus.

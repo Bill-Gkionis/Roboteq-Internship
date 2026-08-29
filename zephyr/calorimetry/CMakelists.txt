@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# DJC calorimeter firmware — Zephyr application build file.
+#
+# Build (from inside ~/roboteq/zephyrproject, with the venv active):
+#
+#   west build -p auto -b esp32s3_lcd_1_47b/esp32s3/procpu \
+#       ~/roboteq/zephyr/calorimetry -- \
+#       -DBOARD_ROOT=$HOME/roboteq/zephyr/waveshare-esp32-s3-1.47B
+#
+# The BOARD_ROOT flag is what lets CMake find the out-of-tree Waveshare board
+# definition. On the final ESP32-S3-DevKitC carrier board it is not needed.
+
+cmake_minimum_required(VERSION 3.20.0)
+
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+project(calorimetry LANGUAGES C)
+
+# --- version string ---------------------------------------------------------
+# VERSION.txt is the single place the firmware version is written. It is read
+# here and handed to the compiler as APP_VERSION_STR so main.c can print it and
+# every logged measurement point can be stamped with it.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt" APP_VERSION_LINES)
+list(GET APP_VERSION_LINES 0 APP_VERSION_STR)
+string(STRIP "${APP_VERSION_STR}" APP_VERSION_STR)
+target_compile_definitions(app PRIVATE APP_VERSION_STR="${APP_VERSION_STR}")
+
+# --- sources ----------------------------------------------------------------
+# Every module is unconditional. The two that depend on optional subsystems
+# (LVGL panel, Wi-Fi/HTTP) compile to an empty stub when their Kconfig is off —
+# see the #if guard at the top of each — so this list stays flat and readable.
+target_sources(app PRIVATE
+    src/main.c
+    src/system.c
+    src/control-system.c
+    src/temp-sense.c
+    src/power-sense.c
+    src/fans.c
+    src/heaters.c
+    src/water-loop.c
+    src/calibration.c
+    src/ui.c
+    src/iot.c
+)
+
+# The web dashboard is a plain file on disk (src/webapp/index.html) turned into
+# a gzipped C array at build time. Editing the HTML therefore needs no C
+# changes, and the flash cost is the compressed size.
+if(CONFIG_HTTP_SERVER)
+    set(gen_dir ${ZEPHYR_BINARY_DIR}/include/generated/)
+    generate_inc_file_for_target(app
+        src/webapp/index.html
+        ${gen_dir}/index.html.gz.inc
+        --gzip
+    )
+
+    # The HTTP server keeps its resource descriptors in a linker-generated
+    # iterable section, one per service. The section must be declared for the
+    # service name used in iot.c ("cal_http").
+    zephyr_linker_sources(SECTIONS sections-rom.ld)
+    zephyr_linker_section(
+        NAME http_resource_desc_cal_http
+        KVMA RAM_REGION GROUP RODATA_REGION
+    )
+endif()
