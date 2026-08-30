@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The pump's stepper driver, as a plain SPI peripheral.
+#
+# Zephyr has no in-tree TMC5160 driver (adi_tmc covers tmc22xx / tmc50xx /
+# tmc51xx / tmcm3216), and the stepper API it does have is position- and
+# velocity-oriented: it would take over STEP generation. This rig wants the
+# opposite split - the STEP train comes from LEDC, in hardware, because the
+# pulse rate IS the flow command and it must not jitter with interrupt load.
+#
+# So the SPI side is used for exactly one thing: setting the run current at
+# boot, which is the whole reason a TMC5160 was chosen over a driver whose
+# limit is a soldered sense resistor.
+
+description: SPI-configured stepper driver (TMC5160 class), external STEP/DIR
+
+compatible: "calorimeter,stepper-spi"
+
+include: [spi-device.yaml]
+
+properties:
+  sense-resistor-milliohms:
+    type: int
+    default: 75
+    description: |
+      R_SENSE per phase, in milliohms. 75 mOhm is the value on the common
+      TMC5160 breakouts; a bare IC layout may differ. The run current is
+      computed from this, so a wrong value here is a wrong motor current.
+
+  run-current-ma:
+    type: int
+    default: 1000
+    description: |
+      Target phase current, RMS, in milliamps.
+      DELIBERATELY CONSERVATIVE. The pump vendor has not published the motor's
+      phase current (only a 30-50 W input-power figure across 6-36 V), so this
+      default is well under anything that could cook the motor or the driver.
+      Raise it once the real number is known - that is one DT edit, which is
+      exactly what an SPI-configurable current limit buys over a sense resistor.
+
+  hold-current-ma:
+    type: int
+    default: 300
+    description: Standstill current, RMS, in milliamps.
+
+  microsteps:
+    type: int
+    default: 16
+    enum: [1, 2, 4, 8, 16, 32, 64, 128, 256]
+    description: |
+      Microsteps per full step. Must agree with the mL/step calibration in
+      NVS - changing one without the other rescales the commanded flow.

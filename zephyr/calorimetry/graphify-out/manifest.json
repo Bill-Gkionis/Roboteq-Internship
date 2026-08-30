@@ -1,0 +1,182 @@
+{
+  "src/calibration.c": {
+    "mtime": 1788112507.3421702,
+    "seen": 1788113352.5078862,
+    "ast_hash": "689284e9f93e2441740fec3eb1984dcd",
+    "semantic_hash": "689284e9f93e2441740fec3eb1984dcd"
+  },
+  "src/calibration.h": {
+    "mtime": 1788043213.8435779,
+    "seen": 1788113352.507888,
+    "ast_hash": "4905b67ef80ed43740b2ce407cdc5198",
+    "semantic_hash": "4905b67ef80ed43740b2ce407cdc5198"
+  },
+  "src/control-system.c": {
+    "mtime": 1788042746.7363937,
+    "seen": 1788113352.50789,
+    "ast_hash": "f414c99c01b0436fbf634ba8947c8681",
+    "semantic_hash": "f414c99c01b0436fbf634ba8947c8681"
+  },
+  "src/control-system.h": {
+    "mtime": 1788042694.6079116,
+    "seen": 1788113352.50789,
+    "ast_hash": "edd9a6d7a7ef5436a8e82ccd38e43ec6",
+    "semantic_hash": "edd9a6d7a7ef5436a8e82ccd38e43ec6"
+  },
+  "src/fans.c": {
+    "mtime": 1788112342.7761075,
+    "seen": 1788113352.507891,
+    "ast_hash": "1eae72a64bb1814b1d66097032dc10f1",
+    "semantic_hash": "1eae72a64bb1814b1d66097032dc10f1"
+  },
+  "src/fans.h": {
+    "mtime": 1788112342.690193,
+    "seen": 1788113352.507891,
+    "ast_hash": "c8e7c333f9011d3aade069fe6fd988d3",
+    "semantic_hash": "c8e7c333f9011d3aade069fe6fd988d3"
+  },
+  "src/heaters.c": {
+    "mtime": 1788042901.8456504,
+    "seen": 1788113352.507892,
+    "ast_hash": "c686070eb77a182e3beda572360b8603",
+    "semantic_hash": "c686070eb77a182e3beda572360b8603"
+  },
+  "src/heaters.h": {
+    "mtime": 1788042901.8417268,
+    "seen": 1788113352.507892,
+    "ast_hash": "66437aab4466d4089cd1c0f915d2a555",
+    "semantic_hash": "66437aab4466d4089cd1c0f915d2a555"
+  },
+  "src/iot.c": {
+    "mtime": 1788045905.0826654,
+    "seen": 1788113352.507893,
+    "ast_hash": "03b49a642a2c0e93d8d02cb5ca18e9b5",
+    "semantic_hash": "03b49a642a2c0e93d8d02cb5ca18e9b5"
+  },
+  "src/iot.h": {
+    "mtime": 1788043527.5949366,
+    "seen": 1788113352.507894,
+    "ast_hash": "f9219bcf563d2bdd6b61eee5b3ee7276",
+    "semantic_hash": "f9219bcf563d2bdd6b61eee5b3ee7276"
+  },
+  "src/main.c": {
+    "mtime": 1788112507.3414717,
+    "seen": 1788113352.507894,
+    "ast_hash": "cfc011861ce51e8b96ff65b1010eb35b",
+    "semantic_hash": "cfc011861ce51e8b96ff65b1010eb35b"
+  },
+  "src/model_gen.h": {
+    "mtime": 1788112418.6411912,
+    "seen": 1788113352.507895,
+    "ast_hash": "ef8d55c62aa8569e989240c66ffeff06",
+    "semantic_hash": "ef8d55c62aa8569e989240c66ffeff06"
+  },
+  "src/power-sense.c": {
+    "mtime": 1788112294.5339615,
+    "seen": 1788113352.507895,
+    "ast_hash": "77659d1604bfe99e34f00db1d2c4f7b8",
+    "semantic_hash": "77659d1604bfe99e34f00db1d2c4f7b8"
+  },
+  "src/power-sense.h": {
+    "mtime": 1788112282.174999,
+    "seen": 1788113352.507896,
+    "ast_hash": "684017d0ee5050252861410a2e16fe88",
+    "semantic_hash": "684017d0ee5050252861410a2e16fe88"
+  },
+  "src/system.c": {
+    "mtime": 1788112787.227697,
+    "seen": 1788113352.507896,
+    "ast_hash": "41d2e403ce2cb169525cb6195a644480",
+    "semantic_hash": "41d2e403ce2cb169525cb6195a644480"
+  },
+  "src/system.h": {
+    "mtime": 1788043022.2291758,
+    "seen": 1788113352.5078971,
+    "ast_hash": "bc1532a2b58d88b68dd5ea545475970c",
+    "semantic_hash": "bc1532a2b58d88b68dd5ea545475970c"
+  },
+  "src/temp-sense.c": {
+    "mtime": 1788112220.0665429,
+    "seen": 1788113352.5078971,
+    "ast_hash": "3bf2912675a2439495b2e4e1a7ef72ed",
+    "semantic_hash": "3bf2912675a2439495b2e4e1a7ef72ed"
+  },
+  "src/temp-sense.h": {
+    "mtime": 1788112220.0620322,
+    "seen": 1788113352.507898,
+    "ast_hash": "0e9a553165740046814a4629e970ac89",
+    "semantic_hash": "0e9a553165740046814a4629e970ac89"
+  },
+  "src/types.h": {
+    "mtime": 1788112418.524111,
+    "seen": 1788113352.5078988,
+    "ast_hash": "5af9cf98f0238c7f225c8fe5795dd6ca",
+    "semantic_hash": "5af9cf98f0238c7f225c8fe5795dd6ca"
+  },
+  "src/ui.c": {
+    "mtime": 1788046379.7408273,
+    "seen": 1788113352.5078988,
+    "ast_hash": "e3d5d495cba17d3b194700c253d27010",
+    "semantic_hash": "e3d5d495cba17d3b194700c253d27010"
+  },
+  "src/ui.h": {
+    "mtime": 1788043469.783999,
+    "seen": 1788113352.5079,
+    "ast_hash": "9533d4068b0041c445903482ec875979",
+    "semantic_hash": "9533d4068b0041c445903482ec875979"
+  },
+  "src/water-loop.c": {
+    "mtime": 1788112556.5958393,
+    "seen": 1788113352.5079,
+    "ast_hash": "04196f9e975f5b061ed6c784e0e39529",
+    "semantic_hash": "04196f9e975f5b061ed6c784e0e39529"
+  },
+  "src/water-loop.h": {
+    "mtime": 1788112399.5047884,
+    "seen": 1788113352.507901,
+    "ast_hash": "3f7ac0c4ee91660096b9f2512d8a54fc",
+    "semantic_hash": "3f7ac0c4ee91660096b9f2512d8a54fc"
+  },
+  "tools/gen_model.py": {
+    "mtime": 1788112418.5245087,
+    "seen": 1788113352.507902,
+    "ast_hash": "bc2456a583e1e84ed3765b01c124047e",
+    "semantic_hash": "bc2456a583e1e84ed3765b01c124047e"
+  },
+  "CMakeLists.txt": {
+    "mtime": 1788045392.7060862,
+    "seen": 1788113352.507902,
+    "ast_hash": "d36dd36123571c5fa33346da72d472ad",
+    "semantic_hash": "d36dd36123571c5fa33346da72d472ad"
+  },
+  "README.md": {
+    "mtime": 1788112974.6919882,
+    "seen": 1788113352.5079029,
+    "ast_hash": "f7ebfdb6508ba9ff3a2c848678a01bbc",
+    "semantic_hash": "f7ebfdb6508ba9ff3a2c848678a01bbc"
+  },
+  "dts/bindings/calorimeter-io.yaml": {
+    "mtime": 1788111966.8754778,
+    "seen": 1788113352.5079029,
+    "ast_hash": "4ebb9908ef606470ef84b2c45a62d5b9",
+    "semantic_hash": "4ebb9908ef606470ef84b2c45a62d5b9"
+  },
+  "dts/bindings/calorimeter-stepper.yaml": {
+    "mtime": 1788111966.882326,
+    "seen": 1788113352.507904,
+    "ast_hash": "a03cc951e31e29fac98f6ad290b765bd",
+    "semantic_hash": "a03cc951e31e29fac98f6ad290b765bd"
+  },
+  "dts/bindings/calorimeter-thermal-zone.yaml": {
+    "mtime": 1788111966.879009,
+    "seen": 1788113352.507904,
+    "ast_hash": "2f9f8114adbb0428ffce80b1008fd613",
+    "semantic_hash": "2f9f8114adbb0428ffce80b1008fd613"
+  },
+  "src/webapp/index.html": {
+    "mtime": 1788045763.0181444,
+    "seen": 1788113352.507905,
+    "ast_hash": "fa7ca04df64f067fce3a3a4cbe51c112",
+    "semantic_hash": "fa7ca04df64f067fce3a3a4cbe51c112"
+  }
+}

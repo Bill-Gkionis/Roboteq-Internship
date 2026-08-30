@@ -22,6 +22,13 @@
  *   REJECT  is the cooling actuator for the reject loop, and the only fan
  *           group whose duty is meant to move during a run.  That loop buys
  *           schedule, not accuracy.
+ *
+ * TACHOMETERS.  The carrier board routes one tach line per chain, because only
+ * fan #1 of a PST daisy chain reports tach at all.  So a tach can prove that
+ * SOMETHING in the chain is turning, and it cannot tell you which of three has
+ * stopped - that is what the rail current is for, since a stopped fan draws
+ * visibly less.  Both signals are exposed here and both are checked: they fail
+ * in different ways, which is the point of having two.
  */
 
 #ifndef CALORIMETRY_FANS_H_
@@ -39,6 +46,12 @@ enum fan_group {
 int fans_init(void);
 
 /**
+ * Convert the accumulated tach edges into RPM.  Called once per control tick
+ * with the measured interval.
+ */
+void fans_service(float dt);
+
+/**
  * Set one group's duty, 0.0 .. 1.0.
  *
  * Refuses to change FAN_INNER while it is frozen and returns -EPERM; use
@@ -52,6 +65,26 @@ float fans_get(enum fan_group g);
 /** Freeze / unfreeze the inner group.  Freezing latches the current duty. */
 void fans_freeze_inner(bool freeze);
 bool fans_inner_frozen(void);
+
+/**
+ * Last measured speed [RPM], or -1 when this group has no tach line on this
+ * board.  A PC fan emits two pulses per revolution.
+ */
+float fans_rpm(enum fan_group g);
+
+/** True when this group has a tach line wired. */
+bool fans_has_tach(enum fan_group g);
+
+/**
+ * Fan health, combining both signals: a group commanded above ~20 % duty that
+ * reports (almost) no rotation, or whose rail current has collapsed against
+ * the signature learned at POST.  Returns the first unhealthy group, or
+ * FAN_COUNT.
+ */
+enum fan_group fans_unhealthy(void);
+
+/** Record the current each group draws when it is known good (POST). */
+void fans_learn_signature(enum fan_group g, float amps);
 
 /** All groups off.  Called by the safety path. */
 void fans_all_off(void);

@@ -1,0 +1,497 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * ===========================================================================
+ *  THE CARRIER BOARD - ESP32-S3-DevKitC-1-N8R8 on the calorimeter PCB
+ * ===========================================================================
+ *
+ *  Transcribed from Board/Design.md's J1/J3 pin tables.  Every net name in the
+ *  comments is the one used there, so the schematic and this file can be
+ *  diffed line by line.
+ *
+ *  Build:
+ *    west build -b esp32s3_devkitc/esp32s3/procpu ~/roboteq/zephyr/calorimetry \
+ *        -S psram-8M -- -DEXTRA_CONF_FILE=wifi.conf
+ *
+ *  The -S psram-8M snippet is what makes it an N8R8 rather than an N8: the
+ *  upstream board file includes esp32s3_wroom_n8.dtsi (8 MB flash, no PSRAM),
+ *  and the snippet adds the 8 MB octal PSRAM.  Octal PSRAM is why GPIO35/36/37
+ *  are no-connect on the carrier board.
+ *
+ *  Strapping discipline, enforced by omission: GPIO0, 3, 45 and 46 appear
+ *  nowhere below.  Not as a gate, not as a pulldown, not as a test point.
+ *  That is why the heater PWM lines start at GPIO4.
+ *
+ *  Console is UART0 on GPIO43/44 through the DevKitC's CP2102, which is how
+ *  the upstream board file has it; native USB (GPIO19/20) stays unused.
+ * ===========================================================================
+ */
+
+#include <zephyr/dt-bindings/pinctrl/esp32s3-pinctrl.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
+
+/ {
+	aliases {
+		/* Everything the app opens goes through one of these.  No .c file
+		 * names a pin, an address or a bus. */
+		cal-zone-inner = &zone_inner;
+		cal-zone-guard = &zone_guard;
+		cal-t-board    = &tmp_board;
+		cal-rtd-in     = &rtd_water_in;
+		cal-rtd-out    = &rtd_water_out;
+		cal-flow       = &pcnt;
+		cal-ina-hin    = &ina_heat_inner;
+		cal-ina-hgrd   = &ina_heat_guard;
+		cal-ina-aux    = &ina_aux;
+		cal-pump-drv   = &pump_drv;
+	};
+
+	/*
+	 * Thermal zones.  The firmware averages every sensor listed in a zone,
+	 * so making the guard zonal (N faces) is adding phandles here - not a
+	 * refactor.  Order is fixed by the two aliases above, not by DT order.
+	 */
+	cal_zones {
+		zone_inner: zone_inner {
+			compatible = "calorimeter,thermal-zone";
+			zone-name = "inner";
+			sensors = <&tmp_inner_0>;
+		};
+
+		zone_guard: zone_guard {
+			compatible = "calorimeter,thermal-zone";
+			zone-name = "guard";
+			sensors = <&tmp_guard_0>;
+		};
+	};
+
+	/*
+	 * PWM outputs.  LEDC on the S3 has 8 channels and 4 timers; channels
+	 * sharing a timer share a frequency, which is exactly how these are
+	 * grouped:  timer0 = 1 kHz heaters, timer1 = 25 kHz fans,
+	 *           timer2 = pump STEP (rewritten on every flow change).
+	 */
+	cal_pwm {
+		compatible = "pwm-leds";
+
+		/* J1-4 / J1-5 -> UCC27524 INA / INB.  No level shifter: the
+		 * driver's inputs switch at 2.3 V max rising and TI states the
+		 * input maximum is not restricted by VDD, so 3.3 V logic drives
+		 * a 12 V-supplied gate driver directly.  INA/INB carry a 120 k
+		 * internal pulldown and the output is held LOW on a floating
+		 * input, so the heaters cannot fire while the ESP32 is in reset
+		 * - backed by an external 10 k pulldown at each input. */
+		pwm_heat_inner: pwm_heat_inner {
+			label = "HEAT_INNER_PWM";
+			pwms = <&ledc0 0 PWM_HZ(1000) PWM_POLARITY_NORMAL>;
+		};
+		pwm_heat_guard: pwm_heat_guard {
+			label = "HEAT_GUARD_PWM";
+			pwms = <&ledc0 1 PWM_HZ(1000) PWM_POLARITY_NORMAL>;
+		};
+
+		/* J1-6/7, J1-8 -> fan header pin 4 through an open-drain buffer.
+		 * A 4-wire fan pulls its PWM pin up internally to 3.3-5 V and
+		 * expects to be pulled down; driving it push-pull is contention.
+		 * The buffer is non-inverting (74LVC1G07 class), so the duty
+		 * written here is the duty the fan sees. */
+		pwm_fan_inner: pwm_fan_inner {
+			label = "FAN_INNER_PWM";
+			pwms = <&ledc0 2 PWM_HZ(25000) PWM_POLARITY_NORMAL>;
+		};
+		pwm_fan_guard: pwm_fan_guard {
+			label = "FAN_GUARD_PWM";
+			pwms = <&ledc0 3 PWM_HZ(25000) PWM_POLARITY_NORMAL>;
+		};
+		pwm_fan_reject: pwm_fan_reject {
+			label = "FAN_REJECT_PWM";
+			pwms = <&ledc0 4 PWM_HZ(25000) PWM_POLARITY_NORMAL>;
+		};
+
+		/* J3-8 -> TMC5160 STEP.  The pulse FREQUENCY is the flow
+		 * command, so water-loop.c rewrites the period on every setpoint
+		 * change.  It comes from LEDC - hardware - because a software
+		 * toggle jitters with every interrupt in the system, and this is
+		 * the one actuator the meter scales by. */
+		pwm_pump_step: pwm_pump_step {
+			label = "PUMP_STEP";
+			pwms = <&ledc0 5 PWM_HZ(1000) PWM_POLARITY_NORMAL>;
+		};
+	};
+
+	/* Discrete IO, described by the app's own binding. */
+	cal_io: cal_io {
+		compatible = "calorimeter,io";
+
+		/* J3-17, J3-9.  GPIO39 is MTCK and is pulled up at boot, which
+		 * is exactly what an active-low driver enable wants - the pump
+		 * is disabled through every reset.  External 10 k to 3V3 makes
+		 * that true even when the pin is an input. */
+		pump-dir-gpios    = <&gpio1 15 GPIO_ACTIVE_HIGH>;   /* GPIO47 */
+		pump-enable-gpios = <&gpio1  7 GPIO_ACTIVE_LOW>;    /* GPIO39 */
+
+		/*
+		 * J1-12, GPIO8 - the board's one spare pin.
+		 *
+		 * PROPOSED, not yet in Design.md: the wired-OR ALERT from the
+		 * two heater INA226s.  Design.md leaves GPIO8 for "a heatsink
+		 * NTC or an interlock sense line", but it also replaces the NTC
+		 * with an I2C sensor at 0x48 for exactly the reason of not
+		 * spending this pin - so the NTC use is already ruled out.
+		 *
+		 * Spending it here converts over-current on the two 8.3 A rails
+		 * from a <=1 s software check into a hardware-timed trip that
+		 * the bus-free safety thread can latch.  If the schematic
+		 * chooses otherwise, DELETE THIS PROPERTY - the firmware falls
+		 * back to the software check and says so at boot.
+		 */
+		alert-gpios = <&gpio0 8 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+
+		/* J1-9/10/11.  Open-collector inside the fan, pulled up to 3V3
+		 * (never 12 V - that would put 12 V on a GPIO).  Only fan #1 of
+		 * a PST chain reports tach, so one line per chain is all that
+		 * exists, which is what these three are. */
+		fan-inner-tach-gpios  = <&gpio0 16 GPIO_ACTIVE_LOW>;
+		fan-guard-tach-gpios  = <&gpio0 17 GPIO_ACTIVE_LOW>;
+		fan-reject-tach-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>;
+	};
+};
+
+/* ------------------------------------------------------------------ pinctrl */
+&pinctrl {
+	ledc0_default: ledc0_default {
+		group1 {
+			pinmux = <LEDC_CH0_GPIO4>,    /* HEAT_INNER_PWM  J1-4  */
+				 <LEDC_CH1_GPIO5>,    /* HEAT_GUARD_PWM  J1-5  */
+				 <LEDC_CH2_GPIO6>,    /* FAN_INNER_PWM   J1-6  */
+				 <LEDC_CH3_GPIO7>,    /* FAN_GUARD_PWM   J1-7  */
+				 <LEDC_CH4_GPIO15>,   /* FAN_REJECT_PWM  J1-8  */
+				 <LEDC_CH5_GPIO40>;   /* PUMP_STEP       J3-8  */
+			output-enable;
+		};
+	};
+
+	/* J3-18.  The Biotech flow sensor's VCC is set to 3.3 V, so its
+	 * push-pull output drives this pin directly - no level shifter. */
+	pcnt_flow_default: pcnt_flow_default {
+		group1 {
+			pinmux = <PCNT0_CH0SIG_GPIO21>;
+			bias-pull-up;
+		};
+	};
+
+	/* J3-6/7.  Overrides the upstream board's GPIO4/5 assignment, which
+	 * would collide with the heater PWM lines. */
+	i2c1_default: i2c1_default {
+		group1 {
+			pinmux = <I2C1_SDA_GPIO42>,
+				 <I2C1_SCL_GPIO41>;
+			bias-pull-up;
+			drive-open-drain;
+			output-high;
+		};
+	};
+
+	/* J1-17/18/19.  Same three pads as the upstream board, MINUS the
+	 * hardware chip select on GPIO10: this bus carries three devices, so
+	 * every CS is a GPIO and GPIO10 becomes one of them.
+	 * GPIO11/12/13 are the native FSPI pads, so the bus takes the direct
+	 * IOMUX path rather than the GPIO matrix. */
+	spim2_default: spim2_default {
+		group1 {
+			pinmux = <SPIM2_MISO_GPIO13>,
+				 <SPIM2_SCLK_GPIO12>;
+		};
+
+		group2 {
+			pinmux = <SPIM2_MOSI_GPIO11>;
+			output-low;
+		};
+	};
+};
+
+/* ---------------------------------------------------------------- LEDC bank */
+&ledc0 {
+	status = "okay";
+	pinctrl-0 = <&ledc0_default>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel0@0 { reg = <0x0>; timer = <0>; };   /* heaters, 1 kHz  */
+	channel1@1 { reg = <0x1>; timer = <0>; };
+	channel2@2 { reg = <0x2>; timer = <1>; };   /* fans,   25 kHz  */
+	channel3@3 { reg = <0x3>; timer = <1>; };
+	channel4@4 { reg = <0x4>; timer = <1>; };
+	channel5@5 { reg = <0x5>; timer = <2>; };   /* pump STEP       */
+};
+
+/* ------------------------------------------------------- flow pulse counter */
+&pcnt {
+	status = "okay";
+	pinctrl-0 = <&pcnt_flow_default>;
+	pinctrl-names = "default";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	pcnt_flow: unit0@0 {
+		reg = <0>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		/* 1000 APB cycles = 12.5 us of glitch rejection, against a
+		 * highest expected pulse rate of ~35 Hz. */
+		filter = <1000>;
+		/* Makes the driver's ISR accumulate into a 32-bit software
+		 * counter, so the count never rolls over inside a campaign. */
+		high-limit = <10000>;
+		low-limit = <(-10000)>;
+
+		channel0@0 {
+			reg = <0>;
+			sig-pos-mode = <1>;   /* count up on the rising edge */
+			sig-neg-mode = <0>;
+			ctrl-h-mode = <0>;
+			ctrl-l-mode = <0>;
+		};
+	};
+};
+
+/* ================================================================== I2C0 ====
+ * On-board telemetry bus, J3-4/5 (GPIO1/2), 2.2 k pull-ups.
+ *
+ * This is the bus the control loop and the safety logic feed on, which is
+ * exactly why it is NOT the same bus as the chamber probes: a shorted probe
+ * lead on a handled cable cannot take power monitoring down with it.
+ *
+ * 100 kHz.  There is zero speed pressure at a 1 Hz tick and the noise immunity
+ * of the slower edge rate is free.
+ */
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+
+	/*
+	 * WHICH RAILS ARE METERED, AND TO WHAT GRADE, IS A BOUNDARY DECISION.
+	 * Boundary B1 is the inner chamber; every watt dissipated inside it
+	 * that is not metered is reported as DUT loss one-for-one.
+	 */
+	ina_heat_inner: ina226@40 {
+		compatible = "ti,ina226";
+		reg = <0x40>;                       /* A1=GND, A0=GND */
+		/* INSIDE B1, and the best electrical measurement in the rig:
+		 * this resistor is both the chamber preheat AND the
+		 * DUT-substitution calibration reference, so it is wired
+		 * 4-wire/Kelvin with the sense leads on the resistor's own
+		 * terminals.  At 12 V and ~9.8 A, sensing at the supply instead
+		 * would cost several percent of the calibration reference. */
+		rshunt-micro-ohms = <5000>;         /* 5 mR -> 50 mV at 10 A */
+		current-lsb-microamps = <500>;
+		avg-count = <64>;                   /* ~64 PWM periods per read */
+		vbus-conversion-time-us = <1100>;
+		vshunt-conversion-time-us = <1100>;
+		alert-gpios = <&gpio0 8 GPIO_ACTIVE_LOW>;
+	};
+
+	ina_heat_guard: ina226@41 {
+		compatible = "ti,ina226";
+		reg = <0x41>;                       /* A1=GND, A0=VS */
+		/* OUTSIDE B1, protection grade only.  Once the guard loop is
+		 * closed, its integral action drives this channel's DC gain to
+		 * the reading to exactly zero - so the largest power in the rig
+		 * needs the least accurate measurement of any of them. */
+		rshunt-micro-ohms = <5000>;
+		current-lsb-microamps = <500>;
+		avg-count = <64>;
+		alert-gpios = <&gpio0 8 GPIO_ACTIVE_LOW>;
+	};
+
+	/*
+	 * Three channels in one part: inner fans, guard fans, pump.
+	 * A0 goes to SCL, not GND, purely because the INA3221 and the INA226
+	 * both default to 0x40 - a collision that is invisible until the bus
+	 * scan comes back one device short.
+	 *
+	 * Channel 1 (inner fans) is INSIDE B1 and measurement grade: those
+	 * watts are subtracted from the reading, and the same current is the
+	 * only thing that can see one stalled fan in a PST daisy chain.
+	 * Channels 2 and 3 are health only.
+	 */
+	ina_aux: ina3221@43 {
+		compatible = "ti,ina3221";
+		reg = <0x43>;                       /* A0=SCL */
+		shunt-resistors = <100 100 10>;     /* mOhm: fan, fan, pump */
+		enable-channel = <1 1 1>;
+		avg-mode = <2>;                     /* 16 samples */
+		conv-time-bus = <4>;                /* 1.1 ms */
+		conv-time-shunt = <4>;
+	};
+
+	/*
+	 * Board temperature, on the MOSFET heatsink.  This is Design.md's
+	 * [Thermal protection] item served by an I2C part rather than an
+	 * analog NTC, which is what keeps GPIO8 free for the ALERT line above.
+	 *
+	 * PART NOT YET CONFIRMED (Components.md is empty).  Declared as a
+	 * TMP11x because that is what the rest of the rig uses and 0x48 is
+	 * what an ADD0=GND part of that family answers on.  If the schematic
+	 * picks a TMP102/TMP1075/LM75 instead, change the compatible here -
+	 * the firmware treats this sensor as optional and diagnostic, so
+	 * nothing else moves.
+	 */
+	tmp_board: tmp117@48 {
+		compatible = "ti,tmp11x";
+		reg = <0x48>;                       /* ADD0=GND */
+		odr = <0x200>;                      /* 1000 ms */
+		oversampling = <0x40>;              /* 32 samples */
+	};
+};
+
+/* ================================================================== I2C1 ====
+ * Off-board chamber probe bus, J3-6/7 (GPIO42/41), 4.7 k pull-ups, with a
+ * NUP2105LT1G at the connector because this is the cable that gets handled.
+ *
+ * As a bonus, GPIO41/42 are JTAG pads that idle high at boot, which is the
+ * I2C idle state anyway.
+ */
+&i2c1 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+	pinctrl-0 = <&i2c1_default>;
+	pinctrl-names = "default";
+
+	/*
+	 * The mux is not about the address ceiling alone (TMP117 has only four
+	 * addresses and the guard array is heading for 8-12+).  Its other job
+	 * is fault isolation: a sensor that jams SDA low can be muxed OUT, and
+	 * the rig continues on a known-degraded sensor set instead of dying.
+	 * That property is what justifies the part on its own.
+	 */
+	tca_mux: tca9548a@70 {
+		compatible = "ti,tca9548a";
+		reg = <0x70>;                       /* A2..A0 = GND */
+		status = "okay";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/* Leg 0 - inner chamber.  Add tmp117@49/@4a/@4b here and list
+		 * them in zone_inner's `sensors` to grow the array. */
+		mux_inner: mux_i2c@0 {
+			reg = <0>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			/* Continuous conversion, 64-sample hardware average on a
+			 * 1000 ms cycle: the part averages over exactly one
+			 * control tick, so the firmware needs no filter and
+			 * cannot alias. */
+			tmp_inner_0: tmp117@48 {
+				compatible = "ti,tmp11x";
+				reg = <0x48>;
+				odr = <0x200>;
+				oversampling = <0x60>;
+			};
+		};
+
+		/* Leg 1 - guard gap.  This is the leg that goes zonal. */
+		mux_guard: mux_i2c@1 {
+			reg = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			tmp_guard_0: tmp117@48 {
+				compatible = "ti,tmp11x";
+				reg = <0x48>;
+				odr = <0x200>;
+				oversampling = <0x60>;
+			};
+		};
+	};
+};
+
+/* =================================================================== SPI2 ===
+ * Shared bus, J1-17/18/19 + three GPIO chip selects.
+ *
+ * All three CS lines are pulled up to 3V3 with 10 k so nothing is selected
+ * while the ESP32 is in reset.
+ *
+ * Clock: the TMC5160 tops out near 4 MHz and the MAX31865 at 5 MHz, so 4 MHz
+ * is the bus ceiling.  1 MHz is used, because nothing here is throughput bound
+ * and the slower edges are quieter next to 22 A of switching.
+ *
+ * ON SPI MODE, which Design.md asks to standardise at 3: Zephyr reprograms the
+ * controller per transfer from each device's own spi_dt_spec, so the stock
+ * MAX31865 driver's mode 1 and the TMC5160's mode 3 coexist without either
+ * being touched.  CS gates the deselected device through the CPOL change.
+ * Nothing needs to be forced - worth noting in the schematic rather than
+ * designing around.
+ */
+&spi3 {
+	/* Its upstream pins (GPIO40/21/14/41) are PUMP_STEP, FLOW_PULSE,
+	 * PUMP_CS and I2C1_SCL on this board.  Off it goes. */
+	status = "disabled";
+};
+
+&spi2 {
+	status = "okay";
+	pinctrl-0 = <&spim2_default>;
+	pinctrl-names = "default";
+	cs-gpios = <&gpio0  9 GPIO_ACTIVE_LOW>,   /* J1-15 RTD #1 CS  */
+		   <&gpio0 10 GPIO_ACTIVE_LOW>,   /* J1-16 RTD #2 CS  */
+		   <&gpio0 14 GPIO_ACTIVE_LOW>;   /* J1-20 PUMP_CS    */
+
+	/*
+	 * Jumo VIBROtemp dT pair, Pt100.
+	 *
+	 * NAMING: Design.md labels these nets RTD_CS_INNER / RTD_CS_GUARD.
+	 * Those names look like the chamber sensors, but the chamber sensors
+	 * are the TMP117 array on I2C1 - these two MAX31865s are the WATER
+	 * inlet/outlet pair, which is what the whole reading is computed from.
+	 * Mapped here as #1 = inlet (cold leg), #2 = outlet.  Worth renaming in
+	 * the schematic to RTD_CS_W_IN / RTD_CS_W_OUT before it confuses
+	 * someone during bring-up.
+	 *
+	 * KNOWN LIMITATION: two converters means two reference resistors, and
+	 * their mismatch does NOT cancel in the difference the way one muxed
+	 * converter's would.  The per-flow-range in-situ tare absorbs it.
+	 */
+	rtd_water_in: max31865@0 {
+		compatible = "maxim,max31865";
+		reg = <0>;
+		spi-max-frequency = <1000000>;
+		resistance-at-zero = <100>;      /* Pt100 */
+		resistance-reference = <430>;
+		filter-50hz;                     /* EU mains */
+	};
+
+	rtd_water_out: max31865@1 {
+		compatible = "maxim,max31865";
+		reg = <1>;
+		spi-max-frequency = <1000000>;
+		resistance-at-zero = <100>;
+		resistance-reference = <430>;
+		filter-50hz;
+	};
+
+	/*
+	 * TMC5160.  SPI is used for configuration only - STEP comes from LEDC.
+	 * Mode 3, MSB first, as the part requires.
+	 *
+	 * run-current-ma is deliberately low: the pump vendor has not published
+	 * the motor's phase current, only a 30-50 W input-power figure.  Raise
+	 * it when that number arrives; being one DT property instead of a
+	 * soldered resistor is the whole reason this part was chosen.
+	 */
+	pump_drv: stepper@2 {
+		compatible = "calorimeter,stepper-spi";
+		reg = <2>;
+		spi-max-frequency = <1000000>;
+		spi-cpol;
+		spi-cpha;
+		sense-resistor-milliohms = <75>;
+		run-current-ma = <1000>;
+		hold-current-ma = <300>;
+		microsteps = <16>;
+	};
+};

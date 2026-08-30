@@ -29,10 +29,14 @@ LOG_MODULE_REGISTER(calib, LOG_LEVEL_INF);
 /* One tare per ranging row, because the tare is flow dependent. */
 #define TARE_ROWS CAL_RANGE_COUNT
 
+/* Enough offset slots for every probe in every zone.  Sized to match
+ * ZONE_MAX_SENSORS x TEMP_CH_COUNT in temp-sense.c. */
+#define OFFSET_SLOTS 16
+
 /* --------------------------------------------------------------- store ---- */
 
 static struct {
-	float t_offset[TEMP_CH_COUNT];   /* K, per chamber sensor      */
+	float t_offset[OFFSET_SLOTS];    /* K, per PROBE, not per zone */
 	float tare[TARE_ROWS];           /* K, per flow range          */
 	float k_factor;                  /* pulses/L, turbine          */
 	float ml_per_step;               /* mL, pump displacement      */
@@ -47,7 +51,7 @@ static int settings_set_cb(const char *name, size_t len,
 	if (settings_name_steq(name, "toff", &next) && next) {
 		const int i = atoi(next);
 
-		if (i >= 0 && i < TEMP_CH_COUNT && len == sizeof(float)) {
+		if (i >= 0 && i < OFFSET_SLOTS && len == sizeof(float)) {
 			return read_cb(cb_arg, &store.t_offset[i], len) > 0
 				       ? 0 : -EINVAL;
 		}
@@ -88,6 +92,12 @@ static void save_float(const char *key, float v)
 	}
 }
 
+/* One flat NVS slot per probe, so the key survives adding a guard face. */
+static int slot_of(int zone, int idx)
+{
+	return zone * (OFFSET_SLOTS / TEMP_CH_COUNT) + idx;
+}
+
 int calibration_init(void)
 {
 	int rc = settings_subsys_init();
@@ -107,8 +117,15 @@ int calibration_init(void)
 		LOG_WRN("settings_load failed (%d) - using defaults", rc);
 	}
 
-	for (int i = 0; i < TEMP_CH_COUNT; i++) {
-		temp_sense_set_offset((enum temp_channel)i, store.t_offset[i]);
+	for (int z = 0; z < TEMP_CH_COUNT; z++) {
+		for (int i = 0; i < temp_sense_sensor_count(z); i++) {
+			const int slot = slot_of(z, i);
+
+			if (slot < OFFSET_SLOTS) {
+				temp_sense_set_offset((enum temp_channel)z, i,
+						      store.t_offset[slot]);
+			}
+		}
 	}
 	water_loop_set_k_factor(store.k_factor);
 	water_loop_set_ml_per_step(store.ml_per_step);
@@ -158,7 +175,7 @@ static struct {
 	float arg;
 	int elapsed_s;
 	int total_s;
-	struct cal_stat acc[4];   /* one per averaged channel */
+	struct cal_stat acc[OFFSET_SLOTS];   /* one per averaged probe */
 	int tare_row;
 } run;
 
@@ -177,7 +194,7 @@ void calibration_request(enum cal_cmd_type type, float arg)
 	run.elapsed_s = 0;
 	run.tare_row = 0;
 
-	for (int i = 0; i < 4; i++) {
+	for (int i = 0; i < OFFSET_SLOTS; i++) {
 		cal_stat_reset(&run.acc[i]);
 	}
 
@@ -252,16 +269,21 @@ bool calibration_service(struct cal_snapshot *s, float dt)
 	switch (run.active) {
 	case CAL_CMD_CAL_SOAK:
 		if (averaging) {
-			for (int i = 0; i < TEMP_CH_COUNT; i++) {
-				struct meas m = temp_sense_get(
-					(enum temp_channel)i);
+			/* Every PROBE, not every zone: the whole value of the
+			 * soak is per-sensor relative calibration, and averaging
+			 * a zone first would throw exactly that away. */
+			for (int z = 0; z < TEMP_CH_COUNT; z++) {
+				for (int i = 0;
+				     i < temp_sense_sensor_count(z); i++) {
+					const int slot = slot_of(z, i);
+					float raw;
 
-				if (m.flags & MEAS_VALID) {
-					/* The stored offset is already
-					 * subtracted on read, so add it back to
-					 * recover the RAW reading. */
-					cal_stat_push(&run.acc[i],
-						      m.v + store.t_offset[i]);
+					if (slot < OFFSET_SLOTS &&
+					    temp_sense_raw((enum temp_channel)z,
+							   i, &raw)) {
+						cal_stat_push(&run.acc[slot],
+							      raw);
+					}
 				}
 			}
 		}
@@ -273,7 +295,7 @@ bool calibration_service(struct cal_snapshot *s, float dt)
 			float mean = 0.0f;
 			int n = 0;
 
-			for (int i = 0; i < TEMP_CH_COUNT; i++) {
+			for (int i = 0; i < OFFSET_SLOTS; i++) {
 				if (run.acc[i].n) {
 					mean += cal_stat_mean(&run.acc[i]);
 					n++;
@@ -286,20 +308,32 @@ bool calibration_service(struct cal_snapshot *s, float dt)
 			}
 			mean /= (float)n;
 
-			for (int i = 0; i < TEMP_CH_COUNT; i++) {
-				if (!run.acc[i].n) {
-					continue;
-				}
-				const float off = cal_stat_mean(&run.acc[i]) - mean;
-				char key[12];
+			for (int z = 0; z < TEMP_CH_COUNT; z++) {
+				for (int i = 0;
+				     i < temp_sense_sensor_count(z); i++) {
+					const int slot = slot_of(z, i);
 
-				store.t_offset[i] = off;
-				temp_sense_set_offset((enum temp_channel)i, off);
-				(void)snprintk(key, sizeof(key), "toff/%d", i);
-				save_float(key, off);
-				LOG_INF("SOAK: '%s' offset %+.4f K",
-					temp_sense_name((enum temp_channel)i),
-					(double)off);
+					if (slot >= OFFSET_SLOTS ||
+					    !run.acc[slot].n) {
+						continue;
+					}
+
+					const float off =
+						cal_stat_mean(&run.acc[slot]) -
+						mean;
+					char key[16];
+
+					store.t_offset[slot] = off;
+					temp_sense_set_offset(
+						(enum temp_channel)z, i, off);
+					(void)snprintk(key, sizeof(key),
+						       "toff/%d", slot);
+					save_float(key, off);
+					LOG_INF("SOAK: '%s'[%d] offset %+.4f K",
+						temp_sense_name(
+							(enum temp_channel)z),
+						i, (double)off);
+				}
 			}
 			finish();
 			return true;

@@ -138,7 +138,15 @@ static void acquire(float dt)
 	s.p_heat_inner = power_sense_get(PWR_HEAT_INNER);
 	s.p_heat_guard = power_sense_get(PWR_HEAT_GUARD);
 	s.p_fan_inner = power_sense_get(PWR_FAN_INNER);
+	s.p_fan_guard = power_sense_get(PWR_FAN_GUARD);
 	s.p_pump = power_sense_get(PWR_PUMP);
+	s.t_board = temp_sense_board();
+
+	/* Tach edges accumulated over this interval become RPM here. */
+	fans_service(dt);
+	for (int i = 0; i < FAN_COUNT; i++) {
+		s.rpm_fan[i] = fans_rpm((enum fan_group)i);
+	}
 }
 
 static void meter(void)
@@ -261,6 +269,19 @@ static void control(float dt)
 	s.p_slope = gates.p_slope.slope;
 	s.p_slope_gate = gates.slope_gate;
 
+	/* --- fan health ------------------------------------------------------
+	 * A stalled inner fan silently breaks the single-node assumption the
+	 * whole model rests on, so it is a MEASUREMENT fault: the point is
+	 * invalid, even though nothing is unsafe.
+	 */
+	if (s.tick > 5) {
+		const enum fan_group bad = fans_unhealthy();
+
+		if (bad != FAN_COUNT) {
+			sys_fault_raise(FAULT_FAN_HEALTH, fans_name(bad));
+		}
+	}
+
 	/* --- the flow witness ----------------------------------------------- */
 	if (s.flow_set > 5.0f && meas_ok(&s.flow, now)) {
 		const float rel = fabsf(s.flow.v - s.flow_set) / s.flow_set;
@@ -324,6 +345,14 @@ static int cmd_status(const struct shell *sh, size_t argc, char **argv)
 		    c.gate_null ? "GREEN" : "red",
 		    c.gate_steady ? "GREEN" : "red",
 		    (double)c.p_slope, (double)c.p_slope_gate);
+	shell_print(sh, "fans       in %.0f  gd %.0f  rej %.0f rpm  "
+		    "(-1 = no tach line)",
+		    (double)c.rpm_fan[0], (double)c.rpm_fan[1],
+		    (double)c.rpm_fan[2]);
+	if (c.t_board.flags & MEAS_VALID) {
+		shell_print(sh, "board      %.1f C (MOSFET heatsink)",
+			    (double)c.t_board.v);
+	}
 	shell_print(sh, "heaters    %s", c.heaters_enabled ? "ARMED" : "safe");
 
 	return 0;
@@ -474,11 +503,23 @@ int main(void)
 	s.t_inner_set = 0.0f;                 /* no chamber setpoint yet */
 	s.dt_water_set = cal_ranges[1].dt_set;
 
-	/* Arm the hardware over-current trips.  100 W at 12 V is 8.3 A, so
-	 * 12 A leaves inrush headroom while still being well under the
-	 * MOSFET and the channel fuse. */
+	/*
+	 * Arm the over-current trips.  Board/Design.md sizes the heater output
+	 * at 9.8 A max, so 12 A clears it with inrush headroom while staying
+	 * well under the IPP041N04N and the channel fuse.
+	 *
+	 * This arms the hardware ALERT where the board routes one, and the
+	 * software backstop always - the two are lines of defence, not
+	 * alternatives.
+	 */
 	(void)power_sense_arm_alert(PWR_HEAT_INNER, 12.0f);
 	(void)power_sense_arm_alert(PWR_HEAT_GUARD, 12.0f);
+	/* The INA3221 rails have no ALERT pin, so these are backstop only.
+	 * The pump is bounded by its 50 W / 12 V input-power figure; the fan
+	 * chains are nowhere near an ampere. */
+	power_sense_set_limit(PWR_PUMP, 5.5f);
+	power_sense_set_limit(PWR_FAN_INNER, 1.0f);
+	power_sense_set_limit(PWR_FAN_GUARD, 1.0f);
 
 	ui_init();
 	iot_init();

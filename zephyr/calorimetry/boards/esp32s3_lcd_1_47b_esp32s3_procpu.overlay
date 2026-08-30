@@ -5,13 +5,17 @@
  *  PROVISIONAL BRING-UP OVERLAY - Waveshare ESP32-S3-LCD-1.47B dev kit
  * ===========================================================================
  *
- *  THIS IS NOT THE CARRIER-BOARD OVERLAY.  The custom carrier PCB
- *  (Board/Requirements.md) does not exist yet, so this file wires the whole
- *  calorimeter peripheral set onto the dev kit that already exists, so the
- *  firmware can be built, run and bench-tested end to end.  When the carrier
- *  board is finished ONLY THIS FILE changes: every node label below is a
- *  contract the C code binds to, and no .c file names a pin, an address or a
- *  bus.  (Zephyr Suggestions D10 / section 4, "devicetree first".)
+ *  THIS IS NOT THE CARRIER-BOARD OVERLAY - that is
+ *  boards/esp32s3_devkitc_esp32s3_procpu.overlay, transcribed from
+ *  Board/Design.md.  This file wires the same peripheral set onto the dev kit
+ *  that physically exists, so the firmware can be bench-tested before the PCB
+ *  does.  The two overlays present the SAME device set through the SAME
+ *  aliases, so both boards exercise identical code paths and no .c file names
+ *  a pin, an address or a bus.
+ *
+ *  This one keeps the LCD, and is therefore the only build with the LVGL
+ *  panel: the carrier board's pin budget has no display on it (see
+ *  Dev notes.md).
  *
  *  Pin budget on this dev kit
  *  --------------------------
@@ -48,15 +52,33 @@
 		/* Every device the app opens is reached through one of these, so
 		 * re-pinning for the carrier board never touches a .c file.
 		 */
-		cal-t-inner  = &tmp_inner;
-		cal-t-guard  = &tmp_guard;
-		cal-rtd-in   = &rtd_water_in;
-		cal-rtd-out  = &rtd_water_out;
-		cal-flow     = &pcnt;
-		cal-ina-hin  = &ina_heat_inner;
-		cal-ina-hgrd = &ina_heat_guard;
-		cal-ina-fan  = &ina_fan_inner;
-		cal-ina-pump = &ina_pump;
+		cal-zone-inner = &zone_inner;
+		cal-zone-guard = &zone_guard;
+		cal-rtd-in     = &rtd_water_in;
+		cal-rtd-out    = &rtd_water_out;
+		cal-flow       = &pcnt;
+		cal-ina-hin    = &ina_heat_inner;
+		cal-ina-hgrd   = &ina_heat_guard;
+		cal-ina-aux    = &ina_aux;
+		cal-pump-drv   = &pump_drv;
+		/* No cal-t-board here: the dev kit has no MOSFET heatsink to
+		 * measure.  The firmware treats that sensor as optional, and
+		 * this build is what proves that path compiles and runs. */
+	};
+
+	/* Same zone structure as the carrier board, one sensor each. */
+	cal_zones {
+		zone_inner: zone_inner {
+			compatible = "calorimeter,thermal-zone";
+			zone-name = "inner";
+			sensors = <&tmp_inner_0>;
+		};
+
+		zone_guard: zone_guard {
+			compatible = "calorimeter,thermal-zone";
+			zone-name = "guard";
+			sensors = <&tmp_guard_0>;
+		};
 	};
 
 	/*
@@ -112,6 +134,9 @@
 		pump-dir-gpios = <&gpio0 10 GPIO_ACTIVE_HIGH>;
 		pump-enable-gpios = <&gpio0 11 GPIO_ACTIVE_LOW>;
 		alert-gpios = <&gpio0 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		/* No fan tach lines here - there are no free pins and no fans.
+		 * They are optional in the binding, so fans.c reports "no tach"
+		 * rather than failing, which is the path this build exercises. */
 	};
 
 	/*
@@ -214,14 +239,14 @@
 	 * the part averages in hardware over exactly one control tick, so the
 	 * firmware needs no filter and cannot alias (Suggestions s4.3).
 	 */
-	tmp_inner: tmp117@48 {
+	tmp_inner_0: tmp117@48 {
 		compatible = "ti,tmp11x";
 		reg = <0x48>;
 		odr = <0x200>;		/* TMP11X_DT_ODR_1000_MS     */
 		oversampling = <0x60>;	/* TMP11X_DT_OVERSAMPLING_64 */
 	};
 
-	tmp_guard: tmp117@49 {
+	tmp_guard_0: tmp117@49 {
 		compatible = "ti,tmp11x";
 		reg = <0x49>;
 		odr = <0x200>;
@@ -271,27 +296,20 @@
 		alert-gpios = <&gpio0 13 GPIO_ACTIVE_LOW>;
 	};
 
-	ina_fan_inner: ina226@44 {
-		compatible = "ti,ina226";
-		reg = <0x44>;
-		/* INSIDE B1, mandatory.  Doubles as the only sensor that can
-		 * see one stalled fan in a PST daisy chain, because a stopped
-		 * fan draws visibly less current (Suggestions s4.5).
-		 */
-		rshunt-micro-ohms = <100000>;	/* 100 mR -> 50 mV at 0.5 A */
-		current-lsb-microamps = <20>;
-		avg-count = <16>;
-	};
-
-	ina_pump: ina226@45 {
-		compatible = "ti,ina226";
-		reg = <0x45>;
-		/* OUTSIDE B1, health only (tube binding, occlusion).  The
-		 * Biotech sensor is the flow meter; the pump is the actuator.
-		 */
-		rshunt-micro-ohms = <10000>;	/* 10 mR -> 50 mV at 5 A */
-		current-lsb-microamps = <200>;
-		avg-count = <16>;
+	/*
+	 * Three channels in one part - inner fans, guard fans, pump - exactly
+	 * as the carrier board has it, so this build exercises the same driver
+	 * and the same channel-selection path.  A0 goes to SCL there because
+	 * the INA3221 and the INA226 both default to 0x40.
+	 */
+	ina_aux: ina3221@43 {
+		compatible = "ti,ina3221";
+		reg = <0x43>;
+		shunt-resistors = <100 100 10>;     /* mOhm: fan, fan, pump */
+		enable-channel = <1 1 1>;
+		avg-mode = <2>;
+		conv-time-bus = <4>;
+		conv-time-shunt = <4>;
 	};
 };
 
@@ -302,7 +320,8 @@
 	pinctrl-names = "default";
 	/delete-property/ line-idle-low;	/* was a WS2812 requirement */
 	cs-gpios = <&gpio0 17 GPIO_ACTIVE_LOW>,
-		   <&gpio0 18 GPIO_ACTIVE_LOW>;
+		   <&gpio0 18 GPIO_ACTIVE_LOW>,
+		   <&gpio0 21 GPIO_ACTIVE_LOW>;
 
 	/*
 	 * Jumo VIBROtemp dT pair.  Both probes are Pt100; the MAX31865 binding
@@ -333,6 +352,20 @@
 		resistance-at-zero = <100>;
 		resistance-reference = <430>;
 		filter-50hz;
+	};
+
+	/* Present so the TMC5160 configuration path is compiled and exercised
+	 * on the bench.  Same node shape as the carrier board. */
+	pump_drv: stepper@2 {
+		compatible = "calorimeter,stepper-spi";
+		reg = <2>;
+		spi-max-frequency = <1000000>;
+		spi-cpol;
+		spi-cpha;
+		sense-resistor-milliohms = <75>;
+		run-current-ma = <1000>;
+		hold-current-ma = <300>;
+		microsteps = <16>;
 	};
 };
 

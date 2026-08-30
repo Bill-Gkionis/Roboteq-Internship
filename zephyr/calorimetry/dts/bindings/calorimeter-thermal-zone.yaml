@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# A lumped thermal zone and the sensors that measure it.
+#
+# The guard is heading toward being ZONAL - N faces instead of one lump. If
+# sensor membership is compiled into C, that change is a refactor. Here it is
+# an overlay edit: add a phandle to `sensors` and the firmware averages one
+# more probe into that zone's temperature, with no source change.
+
+description: A lumped thermal zone and the sensors that measure it
+
+compatible: "calorimeter,thermal-zone"
+
+properties:
+  zone-name:
+    type: string
+    required: true
+    description: Short name used in logs and on the panel.
+
+  sensors:
+    type: phandles
+    required: true
+    description: |
+      Temperature sensors belonging to this zone. Their readings are averaged
+      after each sensor's own stored offset is applied, and a sensor that has
+      been declared dead is excluded from the mean rather than dragging it.

@@ -77,4 +77,28 @@ float water_loop_get_tare(void);
 /** Raw turbine pulse total, for the POST and for diagnostics. */
 int32_t water_loop_pulse_count(void);
 
+/* ------------------------------------------------------ the stepper driver */
+
+/**
+ * Configure the TMC5160 over SPI: run current, hold current, microsteps,
+ * chopper.  Called from water_loop_init(); safe to call again to change the
+ * current at runtime.
+ *
+ * Zephyr has no in-tree TMC5160 driver, and the stepper API it does have would
+ * take STEP generation away from LEDC - which this rig needs in hardware,
+ * because the pulse rate IS the flow command.  So the SPI side does exactly
+ * one job: set the current limit that a cheaper driver would have soldered
+ * into a sense resistor.
+ *
+ * Returns 0 on success, -ENODEV when the part does not answer.
+ */
+int water_loop_pump_driver_configure(void);
+
+/**
+ * Read the driver's version byte.  0x30 identifies a TMC5160; anything else
+ * means the SPI link is wrong (wiring, mode, or the wrong part fitted).
+ * Returns a negative errno on a bus failure.
+ */
+int water_loop_pump_driver_version(void);
+
 #endif /* CALORIMETRY_WATER_LOOP_H_ */

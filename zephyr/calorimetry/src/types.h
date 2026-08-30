@@ -108,12 +108,13 @@ const char *cal_state_name(enum cal_state s);
 #define FAULT_INTEGRATOR_PIN BIT(8)  /* guard integrator at the rail > 5 min */
 #define FAULT_FLOW_MISMATCH  BIT(9)  /* commanded vs measured flow disagree  */
 #define FAULT_NULL_BREACH    BIT(10) /* null gate breached PAST the budget   */
-#define FAULT_FAN_HEALTH     BIT(11) /* fan rail current outside signature   */
+#define FAULT_FAN_HEALTH     BIT(11) /* fan stopped: no tach, or current low  */
+#define FAULT_BOARD_OVERTEMP BIT(12) /* MOSFET heatsink above its limit      */
 
 #define FAULT_TIER1_MASK                                                       \
 	(FAULT_ALERT_PIN | FAULT_OVERTEMP | FAULT_SENSOR_STALE |                \
 	 FAULT_SENSOR_DEAD | FAULT_CTRL_STALLED | FAULT_NO_FLOW |               \
-	 FAULT_POST_FAILED)
+	 FAULT_POST_FAILED | FAULT_BOARD_OVERTEMP)
 
 /* ------------------------------------------------------- the shared cluster */
 
@@ -137,7 +138,9 @@ struct cal_snapshot {
 	struct meas p_heat_inner; /* W, measurement grade, INSIDE B1          */
 	struct meas p_heat_guard; /* W, protection grade, outside B1          */
 	struct meas p_fan_inner;  /* W, measurement grade, INSIDE B1          */
+	struct meas p_fan_guard;  /* W, the guard's own energy balance        */
 	struct meas p_pump;       /* W, health only, outside B1               */
+	struct meas t_board;      /* deg C, MOSFET heatsink; may be absent    */
 
 	/* --- derived ------------------------------------------------------- */
 	float p_aux;      /* W, everything metered inside B1                  */
@@ -161,6 +164,7 @@ struct cal_snapshot {
 	float duty_fan_inner;
 	float duty_fan_guard;
 	float duty_fan_reject;
+	float rpm_fan[3];     /* inner/guard/reject, -1 when there is no tach */
 	float pump_frac;      /* fraction of the pump's maximum flow          */
 	float flow_set;       /* mL/min commanded                             */
 

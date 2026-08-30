@@ -165,6 +165,10 @@ static const struct cal_range cal_ranges[CAL_RANGE_COUNT] = {
 #define CAL_T_INNER_MAX   80.0f   /* deg C - hard cutout in firmware  */
 #define CAL_T_GUARD_MAX   80.0f
 #define CAL_T_WATER_MAX   70.0f
+/* The MOSFET heatsink, when the board has a sensor on it.  Well under the
+ * IPP041N04N's rating - this is the board saying "something is wrong with the
+ * airflow or a gate", not the silicon's own limit. */
+#define CAL_T_BOARD_MAX   85.0f
 #define CAL_FLOW_MIN_ML    2.0f   /* mL/min below which heaters are refused */
 #define CAL_FLOW_MAX_ML  400.0f   /* the pump's commanded ceiling here      */
 

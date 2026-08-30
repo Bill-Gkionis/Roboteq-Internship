@@ -21,6 +21,7 @@
 #include "heaters.h"
 #include "fans.h"
 #include "calibration.h"
+#include "iot.h"
 
 LOG_MODULE_REGISTER(sys, LOG_LEVEL_INF);
 
@@ -60,7 +61,8 @@ static const struct fault_name fault_names[] = {
 	{ FAULT_INTEGRATOR_PIN, "GUARD SATURATED" },
 	{ FAULT_FLOW_MISMATCH,  "FLOW MISMATCH" },
 	{ FAULT_NULL_BREACH,    "NULL GATE BREACH" },
-	{ FAULT_FAN_HEALTH,     "FAN HEALTH" },
+	{ FAULT_FAN_HEALTH,     "FAN STOPPED" },
+	{ FAULT_BOARD_OVERTEMP, "BOARD OVER TEMPERATURE" },
 };
 
 void sys_fault_raise(uint32_t bits, const char *why)
@@ -105,8 +107,11 @@ const char *sys_fault_name(uint32_t faults)
 
 /* ================================================== hardware ALERT input == */
 
+/* Optional: a carrier board may not have a pin to spare for it, in which case
+ * the software backstop in the safety thread is the only over-current check
+ * and says so at boot. */
 static const struct gpio_dt_spec alert_pin =
-	GPIO_DT_SPEC_GET(DT_NODELABEL(cal_io), alert_gpios);
+	GPIO_DT_SPEC_GET_OR(DT_NODELABEL(cal_io), alert_gpios, {0});
 static struct gpio_callback alert_cb;
 
 static void alert_isr(const struct device *port, struct gpio_callback *cb,
@@ -120,6 +125,41 @@ static void alert_isr(const struct device *port, struct gpio_callback *cb,
 	 * hardware.  All this does is latch it and kill the outputs. */
 	sys_fault_raise(FAULT_ALERT_PIN, "INA226 over-current");
 }
+
+/* ========================================================= physical button */
+
+/*
+ * On a HEADLESS build the DevKitC's BOOT button is the rig's only physical
+ * control, and STOP is the right thing to put on it: it is the one command
+ * that is always safe, always allowed, and the one an operator reaches for
+ * without reading a screen.
+ *
+ * Not compiled when there is a panel: on the LCD dev kit the same button is
+ * LVGL's tab-cycling key, and stopping the run every time someone changes
+ * screen would be a memorable bug.
+ */
+#if defined(CONFIG_INPUT) && !defined(CONFIG_LVGL)
+#include <zephyr/input/input.h>
+
+static void button_cb(struct input_event *evt, void *user_data)
+{
+	ARG_UNUSED(user_data);
+
+	if (evt->type != INPUT_EV_KEY || evt->code != INPUT_KEY_0 ||
+	    evt->value == 0) {
+		return;   /* release, or some other key */
+	}
+
+	const struct cal_cmd c = {
+		.type = CAL_CMD_STOP,
+		.origin = "button",
+	};
+
+	(void)sys_cmd_submit(&c);
+}
+
+INPUT_CALLBACK_DEFINE(NULL, button_cb, NULL);
+#endif
 
 /* ================================================================ watchdog */
 
@@ -252,6 +292,27 @@ static void safety_thread(void *a, void *b, void *c)
 		    s.t_water_out.v > CAL_T_WATER_MAX) {
 			sys_fault_raise(FAULT_OVERTEMP, "water outlet");
 		}
+		if ((s.t_board.flags & MEAS_VALID) &&
+		    s.t_board.v > CAL_T_BOARD_MAX) {
+			sys_fault_raise(FAULT_BOARD_OVERTEMP,
+					"MOSFET heatsink");
+		}
+
+		/*
+		 * Software over-current backstop.  The hardware ALERT is the
+		 * fast line; this is the one that still exists on a board that
+		 * did not route it, and the one that covers the INA3221 rails,
+		 * which have no ALERT pin at all.  It reads only CACHED values,
+		 * so it stays bus-free.
+		 */
+		{
+			const enum power_rail oc = power_sense_overcurrent();
+
+			if (oc != PWR_COUNT) {
+				sys_fault_raise(FAULT_ALERT_PIN,
+						power_sense_name(oc));
+			}
+		}
 
 		/* --- staleness -------------------------------------------- */
 		if (s.tick > CAL_STALE_TICKS && heaters_enabled()) {
@@ -350,31 +411,47 @@ static int post_isothermal(void)
 	temp_sense_read_all();
 	water_loop_read(1.0f);
 
-	struct meas ti = temp_sense_get(TEMP_CH_INNER);
-	struct meas tg = temp_sense_get(TEMP_CH_GUARD);
-	struct meas wi = water_loop_t_in();
-	struct meas wo = water_loop_t_out();
 	const int64_t now = k_uptime_get();
+	float lo = 1.0e6f, hi = -1.0e6f;
+	int n = 0;
 
-	if (!meas_ok(&ti, now) || !meas_ok(&tg, now)) {
-		LOG_ERR("POST: a chamber sensor did not read");
+	/* Every individual probe, not the zone means: a swapped or duplicated
+	 * sensor inside one zone would average away into a plausible mean. */
+	for (int z = 0; z < TEMP_CH_COUNT; z++) {
+		for (int i = 0; i < temp_sense_sensor_count(z); i++) {
+			float v;
+
+			if (!temp_sense_raw((enum temp_channel)z, i, &v)) {
+				LOG_ERR("POST: zone '%s' sensor %d did not read",
+					temp_sense_name((enum temp_channel)z), i);
+				return -EIO;
+			}
+			lo = MIN(lo, v);
+			hi = MAX(hi, v);
+			n++;
+		}
+	}
+
+	if (n == 0) {
+		LOG_ERR("POST: no chamber sensors at all");
 		return -EIO;
 	}
 
-	float lo = ti.v, hi = ti.v;
-	const float vals[3] = { tg.v, wi.v, wo.v };
-	const bool ok[3] = { true, meas_ok(&wi, now), meas_ok(&wo, now) };
+	struct meas wi = water_loop_t_in();
+	struct meas wo = water_loop_t_out();
 
-	for (int i = 0; i < 3; i++) {
-		if (!ok[i]) {
-			continue;
-		}
-		lo = MIN(lo, vals[i]);
-		hi = MAX(hi, vals[i]);
+	if (meas_ok(&wi, now)) {
+		lo = MIN(lo, wi.v);
+		hi = MAX(hi, wi.v);
+	}
+	if (meas_ok(&wo, now)) {
+		lo = MIN(lo, wo.v);
+		hi = MAX(hi, wo.v);
 	}
 
-	LOG_INF("POST: isothermal spread %.3f K (%.2f .. %.2f degC)",
-		(double)(hi - lo), (double)lo, (double)hi);
+	LOG_INF("POST: isothermal spread %.3f K across %d probes "
+		"(%.2f .. %.2f degC)", (double)(hi - lo), n,
+		(double)lo, (double)hi);
 
 	if ((hi - lo) > 2.0f) {
 		LOG_ERR("POST: sensors disagree by more than 2 K - check wiring");
@@ -388,18 +465,76 @@ static int post_fan_inner(void)  { return fans_set(FAN_INNER, 0.6f); }
 static int post_fan_guard(void)  { return fans_set(FAN_GUARD, 0.6f); }
 static int post_fan_reject(void) { return fans_set(FAN_REJECT, 0.6f); }
 
-static int post_check_fan_inner(void)
+/**
+ * Check one fan group: draw current, and turn.  Also learns the group's
+ * current signature, which is the only signal that can later see ONE stopped
+ * fan in a PST daisy chain.
+ */
+static int post_check_fan(enum fan_group g, enum power_rail rail)
 {
+	/* One second of running before judging: fans spin up slowly and the
+	 * tach needs a window to accumulate edges in. */
+	for (int i = 0; i < 5; i++) {
+		k_msleep(200);
+		fans_service(0.2f);
+	}
 	power_sense_read_all();
 
-	const float i_a = power_sense_current(PWR_FAN_INNER);
+	const float i_a = (rail < PWR_COUNT) ? power_sense_current(rail) : -1.0f;
+	const float rpm = fans_rpm(g);
 
-	LOG_INF("POST: inner fan rail %.3f A", (double)i_a);
+	LOG_INF("POST: fan '%s' %.3f A, %.0f rpm", fans_name(g),
+		(double)i_a, (double)rpm);
 
-	/* 3x Arctic F12 PWM PST at 0.12 A = 0.36 A.  A stopped fan in a PST
-	 * chain is invisible to the shared tach but visible here. */
-	if (i_a < 0.05f) {
-		LOG_ERR("POST: inner fans draw no current");
+	if (rail < PWR_COUNT) {
+		if (i_a < 0.05f) {
+			LOG_ERR("POST: fan '%s' draws no current", fans_name(g));
+			return -EIO;
+		}
+		fans_learn_signature(g, i_a);
+	}
+
+	if (fans_has_tach(g) && rpm < 60.0f) {
+		LOG_ERR("POST: fan '%s' is not turning", fans_name(g));
+		return -EIO;
+	}
+
+	return 0;
+}
+
+static int post_check_fan_inner(void)
+{
+	return post_check_fan(FAN_INNER, PWR_FAN_INNER);
+}
+
+static int post_check_fan_guard(void)
+{
+	return post_check_fan(FAN_GUARD, PWR_FAN_GUARD);
+}
+
+static int post_check_fan_reject(void)
+{
+	return post_check_fan(FAN_REJECT, PWR_COUNT);
+}
+
+/**
+ * The stepper driver's version byte.  This one is worth having as its own POST
+ * row because it is DEFINITIVE: a wrong value means the SPI link is wrong, and
+ * every current setting written over it is then meaningless.
+ */
+static int post_check_stepper(void)
+{
+	const int ver = water_loop_pump_driver_version();
+
+	if (ver < 0) {
+		LOG_ERR("POST: stepper driver SPI failed (%d)", ver);
+		return -EIO;
+	}
+
+	LOG_INF("POST: stepper driver version 0x%02x", ver);
+
+	if (ver != 0x30) {
+		LOG_ERR("POST: not a TMC5160 - check CS, MISO and SPI mode");
 		return -EIO;
 	}
 
@@ -465,11 +600,12 @@ static int post_check_heater_inner(void)
 }
 
 static const struct post_step post_steps[] = {
-	{ "isothermal plausibility", 0,    post_none,        post_isothermal },
-	{ "inner fans",              300,  post_fan_inner,   post_check_fan_inner },
-	{ "guard fans",              300,  post_fan_guard,   post_none },
-	{ "reject fans",             300,  post_fan_reject,  post_none },
-	{ "pump + turbine",          0,    post_pump,        post_check_pump },
+	{ "isothermal plausibility", 0,    post_none,         post_isothermal },
+	{ "stepper driver link",     0,    post_none,         post_check_stepper },
+	{ "inner fans",              300,  post_fan_inner,    post_check_fan_inner },
+	{ "guard fans",              300,  post_fan_guard,    post_check_fan_guard },
+	{ "reject fans",             300,  post_fan_reject,   post_check_fan_reject },
+	{ "pump + turbine",          0,    post_pump,         post_check_pump },
 	{ "inner heater",            0,    post_heater_inner, post_check_heater_inner },
 };
 
@@ -906,9 +1042,10 @@ int sys_init(void)
 						      GPIO_INT_EDGE_TO_ACTIVE);
 		gpio_init_callback(&alert_cb, alert_isr, BIT(alert_pin.pin));
 		(void)gpio_add_callback(alert_pin.port, &alert_cb);
-		LOG_INF("INA226 ALERT input armed");
+		LOG_INF("hardware ALERT input armed (tier 1 over-current)");
 	} else {
-		LOG_WRN("ALERT GPIO not ready - tier 1 over-current trip is OFF");
+		LOG_WRN("no ALERT line on this board - over-current is caught "
+			"by the software backstop instead, one tick slower");
 	}
 
 	watchdog_start();

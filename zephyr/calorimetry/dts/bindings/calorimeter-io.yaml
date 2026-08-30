@@ -2,8 +2,7 @@
 #
 # The calorimeter's discrete (non-PWM, non-bus) IO lines, gathered into one
 # node so the firmware fetches them with GPIO_DT_SPEC_GET() by property name
-# and never mentions a pin number.  Re-pinning for the carrier board is then an
-# overlay edit, not a code change.
+# and never mentions a pin number.  Re-pinning is then an overlay edit.
 
 description: Calorimeter discrete IO lines
 
@@ -17,8 +16,8 @@ properties:
   pump-enable-gpios:
     type: phandle-array
     description: |
-      Stepper driver enable. Active low on every common driver (ENn), and it
-      must have an external pull-UP so the driver is disabled while the MCU
+      Stepper driver enable. Active low on every common driver (DRV_ENN), and
+      it must have an external pull-UP so the driver is disabled while the MCU
       pins are inputs at reset - the mirror of the heater gate pull-down rule.
 
   alert-gpios:
@@ -27,3 +26,20 @@ properties:
       Wired-OR, open-drain ALERT line from the heater-rail INA226s. This is the
       tier-1 hardware-timed over-current trip; firmware only latches it, which
       is why the safety thread can act on it without touching a bus.
+      Optional - when absent, over-current falls back to the software check in
+      the safety thread, which is one control tick slower.
+
+  fan-inner-tach-gpios:
+    type: phandle-array
+    description: |
+      Tachometer input from the inner-chamber fan chain. Open collector inside
+      the fan, so it needs a pull-up to 3V3 (never to 12 V). Only the first fan
+      of a PST daisy chain reports tach, so one line per chain is all there is.
+
+  fan-guard-tach-gpios:
+    type: phandle-array
+    description: Tachometer input from the guard-gap fan chain.
+
+  fan-reject-tach-gpios:
+    type: phandle-array
+    description: Tachometer input from the reject-radiator fan chain.
