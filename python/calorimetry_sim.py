@@ -393,9 +393,10 @@ def demo_windup(P_DUT=600.0, dT=25.0, t_end=5000.0, t_dump=1500.0):
 
 if __name__ == "__main__":
     # ==================== CHANGE THESE ====================
-    P     = 150.0     # DUT power [W]
-    dT    = 15.0      # ΔT across the block [K]  -> this sets the flow
-    T_END = 3600.0    # simulated duration [s]
+    P     = 15    # DUT power [W]
+    dT    = 39.0      # ΔT across the block [K]  -> this sets the flow
+    hour = 3600.0
+    T_END = 8 * hour    # simulated duration [s]
     # ======================================================
     # or from a shell, without editing anything:
     #     python calorimetry_sim.py 300 12
